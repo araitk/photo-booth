@@ -1,4 +1,5 @@
 import './style.css';
+import { returnKeyframes } from './return-effects';
 
 const video = document.querySelector<HTMLVideoElement>('#camera')!;
 const viewfinder = document.querySelector<HTMLDivElement>('#viewfinder')!;
@@ -12,18 +13,127 @@ const actualSettings = document.querySelector<HTMLSpanElement>('#actual-settings
 const liveBadge = document.querySelector<HTMLSpanElement>('#live-badge')!;
 const message = document.querySelector<HTMLParagraphElement>('#camera-message')!;
 const status = document.querySelector<HTMLParagraphElement>('#status')!;
+const shutter = document.querySelector<HTMLButtonElement>('#shutter')!;
+const photoReview = document.querySelector<HTMLButtonElement>('#photo-review')!;
+const capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!;
+const flash = document.querySelector<HTMLDivElement>('#capture-flash')!;
+const galleryDestination = document.querySelector<HTMLDivElement>('.gallery-empty')!;
+const captureCanvas = document.createElement('canvas');
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 let stream: MediaStream | null = null;
 let busy = false;
 let appliedResolution = resolution.value;
 let previewRatio = 16 / 9;
 let requestVersion = 0;
+let captureVersion = 0;
+let capturePhase: 'live' | 'capturing' | 'review' | 'returning' = 'live';
+let photoUrl: string | null = null;
+let reviewTimer: ReturnType<typeof setTimeout> | undefined;
+let transitionTimer: ReturnType<typeof setTimeout> | undefined;
+let animations: Animation[] = [];
 
 function setBusy(value: boolean) {
   busy = value;
   startButton.disabled = value;
-  resolution.disabled = value || !stream;
+  resolution.disabled = value || !stream || capturePhase !== 'live';
+  shutter.disabled = value || !stream || capturePhase !== 'live' || video.readyState < 2 || !video.videoWidth;
 }
+
+function clearPhoto() {
+  captureVersion++;
+  clearTimeout(reviewTimer);
+  clearTimeout(transitionTimer);
+  animations.forEach(animation => animation.cancel());
+  animations = [];
+  photoReview.hidden = true;
+  capturedPhoto.removeAttribute('src');
+  if (photoUrl) URL.revokeObjectURL(photoUrl);
+  photoUrl = null;
+  viewfinder.classList.remove('is-review');
+  capturePhase = 'live';
+  setBusy(busy);
+}
+
+async function capturePhoto() {
+  if (shutter.disabled || !stream) return;
+  capturePhase = 'capturing';
+  setBusy(busy);
+  const version = ++captureVersion;
+  status.textContent = '';
+  const context = captureCanvas.getContext('2d');
+  if (!context) {
+    clearPhoto();
+    status.textContent = '撮影できませんでした。もう一度お試しください。';
+    return;
+  }
+  captureCanvas.width = video.videoWidth;
+  captureCanvas.height = video.videoHeight;
+  try {
+    // Draw the source frame directly: CSS mirroring and UI overlays are excluded.
+    context.drawImage(video, 0, 0);
+    if (!reducedMotion.matches) {
+      const animation = flash.animate([{ opacity: 0.75 }, { opacity: 0 }], { duration: 180 });
+      animations.push(animation);
+    }
+    const blob = await new Promise<Blob>((resolve, reject) => {
+      captureCanvas.toBlob(value => value ? resolve(value) : reject(new Error('capture-failed')), 'image/png');
+    });
+    if (version !== captureVersion || !stream) return;
+    photoUrl = URL.createObjectURL(blob);
+    capturedPhoto.src = photoUrl;
+    await capturedPhoto.decode();
+    if (version !== captureVersion || !stream) return;
+    photoReview.hidden = false;
+    viewfinder.classList.add('is-review');
+    capturePhase = 'review';
+    setCameraStatus('PHOTO');
+    setBusy(busy);
+    reviewTimer = setTimeout(() => { void returnToCamera(); }, 3000);
+  } catch {
+    if (version === captureVersion) {
+      clearPhoto();
+      status.textContent = '撮影できませんでした。もう一度お試しください。';
+    }
+  } finally {
+    captureCanvas.width = 0;
+    captureCanvas.height = 0;
+  }
+}
+
+async function returnToCamera() {
+  if (capturePhase !== 'review') return;
+  capturePhase = 'returning';
+  clearTimeout(reviewTimer);
+  const version = captureVersion;
+  if (reducedMotion.matches) {
+    clearPhoto();
+    if (stream) setCameraStatus('LIVE', true);
+    return;
+  }
+  const duration = 1000;
+  try {
+    const animation = photoReview.animate(
+      returnKeyframes(photoReview.getBoundingClientRect(), galleryDestination.getBoundingClientRect()),
+      { duration, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' },
+    );
+    animations.push(animation);
+    // Some browser views suspend their animation timeline while still running timers.
+    await Promise.race([
+      animation.finished,
+      new Promise<void>(resolve => { transitionTimer = setTimeout(resolve, duration + 120); }),
+    ]);
+  } catch {
+    // Cancelling an animation during camera disconnect is expected.
+  }
+  if (version !== captureVersion) return;
+  clearPhoto();
+  if (stream) setCameraStatus('LIVE', true);
+}
+
+shutter.addEventListener('click', () => { void capturePhoto(); });
+photoReview.addEventListener('click', () => { void returnToCamera(); });
+video.addEventListener('loadeddata', () => { setBusy(busy); });
 
 function setCameraStatus(label: string, live = false) {
   liveBadge.replaceChildren();
@@ -78,6 +188,7 @@ function resetCamera() {
   requestVersion++;
   stream?.getTracks().forEach(track => track.stop());
   stream = null;
+  clearPhoto();
   video.srcObject = null;
   viewfinder.classList.remove('is-live');
   previewRatio = 16 / 9;
@@ -180,7 +291,7 @@ resolution.addEventListener('change', async () => {
   }
 });
 
-video.addEventListener('resize', updateSettings);
+video.addEventListener('resize', () => { updateSettings(); setBusy(busy); });
 window.addEventListener('pagehide', resetCamera);
 
 function updateFullscreen() {

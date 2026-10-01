@@ -24,6 +24,10 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid
 .media-surface { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; }
 video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); display: block; opacity: 0; }
 .is-live video { opacity: 1; }
+.photo-review { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: #101113; transform-origin: center; }
+.photo-review img { display: block; width: 100%; height: 100%; object-fit: contain; }
+.is-review .grid { opacity: 0; }
+.capture-flash { position: absolute; z-index: 5; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .grid { position: absolute; inset: 0; pointer-events: none; }
 .grid i { position: absolute; background: rgba(255,255,255,.15); }
 .grid i:nth-child(1), .grid i:nth-child(2) { top: 0; bottom: 0; width: 1px; }
@@ -51,6 +55,8 @@ select:disabled { opacity: .5; }
 .shutter { height: 66px; width: 66px; border-radius: 50%; background: transparent; border: 1px solid #74777d; display: grid; place-items: center; padding: 4px; }
 .shutter span { width: 54px; height: 54px; border-radius: 50%; background: #e6e7e9; }
 .shutter:disabled { opacity: .4; }
+.shutter:not(:disabled):hover { border-color: #fff; }
+.shutter:not(:disabled):active span { transform: scale(.94); }
 .camera-details { font-size: 10px; color: #a4a8b0; font-variant-numeric: tabular-nums; background: #17181c9e; border-radius: 4px; padding: 4px 7px; }
 .status-message { flex-shrink: 0; font-size: 11px; color: #c4ad87; text-align: center; line-height: 1.6; margin: 0; }
 .status-message:not(:empty) { margin-bottom: 10px; }
