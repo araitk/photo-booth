@@ -64,9 +64,12 @@ restoreSettings();
 
 let stream: MediaStream | null = null;
 let cameraDeviceCount = 0;
+let cameraChangePending: string | null = null;
 let deviceListVersion = 0;
 let busy = false;
 let appliedResolution = resolution.value;
+let resolutionChangePending = false;
+let applyingResolution = false;
 let previewRatio = 16 / 9;
 let requestVersion = 0;
 let captureVersion = 0;
@@ -93,9 +96,9 @@ function setBusy(value: boolean) {
   viewfinder.classList.toggle('is-returning', capturePhase === 'returning');
   previewControls.hidden = !stream;
   startButton.disabled = value;
-  resolution.disabled = value || !stream || capturePhase !== 'live';
-  cameraSelect.disabled = value || capturePhase !== 'live' || cameraDeviceCount === 0;
-  timer.disabled = value || !stream || capturePhase !== 'live';
+  resolution.disabled = false;
+  cameraSelect.disabled = cameraDeviceCount === 0;
+  timer.disabled = false;
   shutter.disabled = value || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
   const counting = capturePhase === 'countdown';
   shutter.classList.toggle('is-counting', counting);
@@ -112,6 +115,12 @@ function setBusy(value: boolean) {
   undoButton.hidden = !photos.canUndo;
   const galleryLocked = value || counting || capturePhase === 'capturing' || (pendingPhotoId !== null && capturePhase !== 'returning');
   galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = galleryLocked; });
+  if (!value && (cameraChangePending !== null || resolutionChangePending)) {
+    void Promise.resolve().then(async () => {
+      await applySelectedCamera();
+      await applySelectedResolution();
+    });
+  }
 }
 
 function thumbnailImage(photo: Photo) {
@@ -639,7 +648,6 @@ function resetCamera() {
   previewRatio = 16 / 9;
   fitPreview();
   placeholder.hidden = false;
-  resolution.disabled = true;
   setCameraStatus('OFF');
   actualSettings.textContent = '';
   actualSettings.hidden = true;
@@ -663,7 +671,7 @@ async function updateCameraList() {
   try {
     const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'videoinput' && device.deviceId);
     if (version !== deviceListVersion) return;
-    const selected = stream?.getVideoTracks()[0]?.getSettings().deviceId || preferredCameraId || cameraSelect.value;
+    const selected = cameraChangePending ?? (stream?.getVideoTracks()[0]?.getSettings().deviceId || preferredCameraId || cameraSelect.value);
     cameraSelect.replaceChildren();
     const automatic = document.createElement('option');
     automatic.value = '';
@@ -692,6 +700,7 @@ async function openCamera(deviceId?: string) {
   if (busy || (stream && deviceId === undefined)) return;
   const previousStream = stream;
   const requestedDevice = deviceId ?? (preferredCameraId || cameraSelect.value);
+  const requestedResolution = resolution.value;
   const version = ++requestVersion;
   let nextStream: MediaStream | null = null;
   setBusy(true);
@@ -704,7 +713,7 @@ async function openCamera(deviceId?: string) {
     }
     try {
       nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
-        ...constraints(resolution.value),
+        ...constraints(requestedResolution),
         ...(requestedDevice ? { deviceId: { exact: requestedDevice } } : {}),
       } });
     } catch (error) {
@@ -713,7 +722,7 @@ async function openCamera(deviceId?: string) {
       preferredCameraId = '';
       cameraSelect.value = '';
       saveSettings();
-      nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints(resolution.value) });
+      nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints(requestedResolution) });
     }
     if (version !== requestVersion) {
       nextStream.getTracks().forEach(track => track.stop());
@@ -729,16 +738,17 @@ async function openCamera(deviceId?: string) {
     previousStream?.getTracks().forEach(track => track.stop());
     placeholder.hidden = true;
     viewfinder.classList.add('is-live');
-    setCameraStatus('LIVE', true);
-    resolution.disabled = false;
+    setCameraStatus(capturePhase === 'review' ? 'PHOTO' : 'LIVE', capturePhase !== 'review');
     updateSettings();
     const settings = stream.getVideoTracks()[0].getSettings();
-    const expectedHeight = Number(resolution.value);
-    if (resolution.value !== 'auto' && (settings.height !== expectedHeight || settings.width !== expectedHeight * 16 / 9)) {
+    const expectedHeight = Number(requestedResolution);
+    const fallback = requestedResolution !== 'auto' && (settings.height !== expectedHeight || settings.width !== expectedHeight * 16 / 9);
+    appliedResolution = fallback ? 'auto' : requestedResolution;
+    resolutionChangePending = resolution.value !== requestedResolution;
+    if (!resolutionChangePending && fallback) {
       resolution.value = 'auto';
       status.textContent = 'カメラが対応する解像度で開始しました。';
     }
-    appliedResolution = resolution.value;
     preferredCameraId = settings.deviceId || '';
     saveSettings();
     const activeStream = stream;
@@ -758,8 +768,8 @@ async function openCamera(deviceId?: string) {
       try {
         await video.play();
         if (version !== requestVersion) return;
-        cameraSelect.value = previousStream.getVideoTracks()[0].getSettings().deviceId || '';
-        setCameraStatus('LIVE', true);
+        cameraSelect.value = cameraChangePending ?? (previousStream.getVideoTracks()[0].getSettings().deviceId || '');
+        setCameraStatus(capturePhase === 'review' ? 'PHOTO' : 'LIVE', capturePhase !== 'review');
         status.textContent = 'カメラを切り替えられませんでした。元のカメラを使用します。';
         return;
       } catch {
@@ -779,7 +789,10 @@ async function openCamera(deviceId?: string) {
 
 startButton.addEventListener('click', () => { void openCamera(); });
 cameraSelect.addEventListener('change', async () => {
-  if (stream) await openCamera(cameraSelect.value);
+  if (stream || busy) {
+    cameraChangePending = cameraSelect.value;
+    await applySelectedCamera();
+  }
   else {
     preferredCameraId = cameraSelect.value;
     saveSettings();
@@ -789,25 +802,51 @@ navigator.mediaDevices?.addEventListener('devicechange', () => { void updateCame
 void updateCameraList();
 timer.addEventListener('change', saveSettings);
 
-resolution.addEventListener('change', async () => {
-  if (!stream || busy) return;
-  const track = stream.getVideoTracks()[0];
+async function applySelectedCamera() {
+  if (cameraChangePending === null || busy || applyingResolution || !['live', 'review'].includes(capturePhase)) return;
+  const requested = cameraChangePending;
+  cameraChangePending = null;
+  if (stream) await openCamera(requested);
+  else {
+    preferredCameraId = requested;
+    saveSettings();
+  }
+}
+
+async function applySelectedResolution() {
+  if (!resolutionChangePending || cameraChangePending !== null || !stream || busy || applyingResolution || !['live', 'review'].includes(capturePhase)) return;
+  const activeStream = stream;
+  const version = requestVersion;
+  const requested = resolution.value;
+  const track = activeStream.getVideoTracks()[0];
   const previousConstraints = track.getConstraints();
+  resolutionChangePending = false;
+  applyingResolution = true;
   setBusy(true);
   status.textContent = '';
   try {
-    await track.applyConstraints(constraints(resolution.value, true));
-    appliedResolution = resolution.value;
+    await track.applyConstraints(constraints(requested, true));
+    if (stream !== activeStream || version !== requestVersion) return;
+    appliedResolution = requested;
     updateSettings();
   } catch {
+    if (stream !== activeStream || version !== requestVersion) return;
     try { await track.applyConstraints(previousConstraints); } catch { /* Show the actual remaining settings below. */ }
-    resolution.value = appliedResolution;
+    if (stream !== activeStream || version !== requestVersion) return;
+    if (resolution.value === requested) resolution.value = appliedResolution;
     status.textContent = 'この解像度は利用できません。変更前の設定に戻しました。';
     updateSettings();
   } finally {
+    applyingResolution = false;
     saveSettings();
-    setBusy(false);
+    if (stream === activeStream && version === requestVersion) setBusy(false);
+    else if (cameraChangePending !== null || resolutionChangePending) setBusy(busy);
   }
+}
+resolution.addEventListener('change', async () => {
+  resolutionChangePending = Boolean(stream) || busy;
+  saveSettings();
+  await applySelectedResolution();
 });
 
 video.addEventListener('resize', () => { updateSettings(); setBusy(busy); });

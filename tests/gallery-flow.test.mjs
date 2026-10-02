@@ -129,9 +129,50 @@ test('camera selection lists video inputs, switches devices, and keeps the origi
     assert.equal(elements.get('#camera').srcObject, active);
     assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'usb');
     run("capturePhase = 'review'; setBusy(false);");
-    assert.equal(selector.disabled, true);
+    assert.equal(selector.disabled, false);
   } finally {
     run('resetCamera();');
+  }
+});
+
+test('camera changes during capture are deferred, use the latest choice, and preserve the captured preview', async () => {
+  const { run, context, elements, pending } = setup({deferPng: true});
+  const requests = [];
+  const tracks = [];
+  context.navigator.mediaDevices = {
+    enumerateDevices: async () => ['built-in', 'usb', 'external'].map(id => ({kind: 'videoinput', deviceId: id, label: id})),
+    getUserMedia: async options => {
+      const id = options.video.deviceId?.exact || 'built-in';
+      requests.push(id);
+      const track = {stop() {}, addEventListener() {}, getSettings: () => ({deviceId: id, width: 1920, height: 1080})};
+      tracks.push(track);
+      return {getTracks: () => [track], getVideoTracks: () => [track]};
+    },
+  };
+  elements.get('#camera').play = async () => {};
+  try {
+    await run('updateCameraList();');
+    await run('openCamera()');
+    const capturing = run('capturePhoto()');
+    const selector = elements.get('#camera-select');
+    assert.equal(selector.disabled, false);
+    selector.value = 'usb';
+    await selector.listeners.get('change')();
+    selector.value = 'external';
+    await selector.listeners.get('change')();
+    assert.deepEqual(requests, ['built-in']);
+    pending[0].callback(new Blob(['png'], {type: 'image/png'}));
+    await capturing;
+    const image = run('capturedPhoto');
+    for (let i = 0; i < 8; i++) await run('Promise.resolve()');
+    assert.deepEqual(requests, ['built-in', 'external']);
+    assert.equal(selector.value, 'external');
+    assert.equal(run('capturedPhoto'), image);
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(run('capturePhase'), 'review');
+    assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
+  } finally {
+    run('resetCamera(); photos.clear();');
   }
 });
 
@@ -204,6 +245,50 @@ test('timer and successfully applied resolution settings persist across reloads,
   const reloaded = setup({storage});
   assert.equal(reloaded.elements.get('#timer').value, '10');
   assert.equal(reloaded.elements.get('#resolution').value, '1080');
+});
+
+test('resolution and timer remain enabled before starting and during review, and rapid resolution changes apply the latest choice', async () => {
+  const storage = new Map();
+  const { run, context, elements } = setup({storage});
+  const selector = elements.get('#resolution');
+  run('setBusy(false);');
+  assert.equal(selector.disabled, false);
+  assert.equal(elements.get('#timer').disabled, false);
+  selector.value = '720';
+  await selector.listeners.get('change')();
+  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '720');
+  const applied = [];
+  let finishFirst;
+  context.testTrack = {
+    getConstraints: () => ({}), getSettings: () => ({}),
+    applyConstraints: options => {
+      applied.push(options.height.exact);
+      return applied.length === 1 ? new Promise(resolve => { finishFirst = resolve; }) : Promise.resolve();
+    },
+  };
+  run(`stream = {getTracks: () => [], getVideoTracks: () => [testTrack]};
+    photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+  try {
+    await run('showPhoto(photos.get(1))');
+    const image = run('capturedPhoto');
+    const firstChange = selector.listeners.get('change')();
+    assert.equal(selector.disabled, false);
+    assert.equal(elements.get('#timer').disabled, false);
+    selector.value = '2160';
+    await selector.listeners.get('change')();
+    finishFirst();
+    await firstChange;
+    await run('Promise.resolve()');
+    await run('Promise.resolve()');
+    assert.deepEqual(applied, [720, 2160]);
+    assert.equal(selector.value, '2160');
+    assert.equal(run('appliedResolution'), '2160');
+    assert.equal(run('capturedPhoto'), image);
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '2160');
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
 });
 
 test('invalid or unavailable saved settings do not prevent camera initialization or control changes', () => {
@@ -338,8 +423,8 @@ test('countdown captures once at the deadline, supports cancellation, and resets
     assert.equal(countdown.textContent, String(seconds));
     assert.equal(countdown.hidden, false);
     assert.equal(shutter['aria-label'], '撮影をキャンセル');
-    assert.equal(timer.disabled, true);
-    assert.equal(elements.get('#resolution').disabled, true);
+    assert.equal(timer.disabled, false);
+    assert.equal(elements.get('#resolution').disabled, false);
     advance(1000);
     assert.equal(countdown.textContent, String(seconds - 1));
     advance((seconds - 1) * 1000 - 1);
