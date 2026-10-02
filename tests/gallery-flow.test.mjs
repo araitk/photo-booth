@@ -703,7 +703,7 @@ test('leaving warns only for unsaved photos and updates after download, deletion
     assert.equal(firstThumbnail.dataset.downloaded, 'false');
     run('downloadSelectedPhoto()');
     assert.equal(firstThumbnail.dataset.downloaded, 'true');
-    assert.equal(firstThumbnail.title, 'ダウンロード済み');
+    assert.match(firstThumbnail.title, /^#1 \d{2}:\d{2}:\d{2}$/);
     assert(firstThumbnail['aria-label'].includes('ダウンロード済み'));
     assert.equal(listeners.has('beforeunload'), true); // Photo 2 is still unsaved.
     await run('showPhoto(photos.get(2))');

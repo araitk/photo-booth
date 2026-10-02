@@ -154,7 +154,11 @@ function thumbnailImage(photo: Photo) {
 function updateDownloadBadge(button: HTMLButtonElement, photo: Photo) {
   const downloaded = Boolean(photo.downloadStarted);
   button.dataset.downloaded = String(downloaded);
-  button.title = downloaded ? 'ダウンロード済み' : '';
+  const date = photo.createdAt;
+  const pad = (value: number) => String(value).padStart(2, '0');
+  const list = photos.list();
+  const number = list.length - list.findIndex(item => item.id === photo.id);
+  button.title = `#${number} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   button.setAttribute('aria-label', `写真 ${photo.id} を表示${downloaded ? '（ダウンロード済み）' : ''}`);
 }
 
