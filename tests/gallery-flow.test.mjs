@@ -4,10 +4,13 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function setup() {
+function setup({ deferPng = false } = {}) {
   const elements = new Map();
   let finishAnimation;
   let nextUrl = 0;
+  const activeUrls = new Map();
+  const encodings = [];
+  const pending = [];
   function element() {
     return {
       value: '1080', readyState: 2, videoWidth: 1920, videoHeight: 1080,
@@ -23,8 +26,15 @@ function setup() {
       querySelector() { return null; },
       getBoundingClientRect: () => ({ left: 100, top: 600, width: 96, height: 54 }),
       async decode() { this.decoded = true; },
+      getContext() { return { drawImage() {} }; },
+      toBlob(callback, type) {
+        if (deferPng && type === "image/png") { pending.push({ canvas: this, callback }); return; }
+        const result = new Blob([type], { type });
+        encodings.push({ canvas: this, callback, result });
+        callback(result);
+      },
       animate(_frames, options) {
-        assert.equal(options.duration, 1000);
+        assert([180, 1000].includes(options.duration));
         return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancel() {} };
       },
     };
@@ -43,7 +53,10 @@ function setup() {
     document, navigator: {},
     window: { matchMedia: () => ({ matches: false }), addEventListener() {} },
     ResizeObserver: class { observe() {} },
-    URL: { createObjectURL: () => `blob:${++nextUrl}`, revokeObjectURL() {} },
+    URL: {
+      createObjectURL(blob) { const url = `blob:${++nextUrl}`; activeUrls.set(url, blob); return url; },
+      revokeObjectURL(url) { activeUrls.delete(url); },
+    },
     Date, Blob, setTimeout, clearTimeout, DOMException,
   });
   for (const file of ['photo-store.ts', 'return-effects.ts', 'main.ts']) {
@@ -55,7 +68,7 @@ function setup() {
     vm.runInContext(compiled, context);
   }
   const run = source => vm.runInContext(source, context);
-  return { elements, context, run, finish: () => finishAnimation(), document };
+  return { elements, context, run, finish: () => finishAnimation(), document, activeUrls, encodings, pending };
 }
 
 test('append each thumbnail and update count only after the return animation finishes', async () => {
@@ -159,4 +172,66 @@ test('countdown captures once at the deadline, supports cancellation, and resets
   run('startShooting()');
   assert.equal(run('captures'), 1);
   assert.equal(countdown.hidden, true);
+});
+
+test('100 captures retain only thumbnails URLs and release originals, images, downloads after deletion', async () => {
+  const { run, activeUrls, encodings, elements } = setup();
+  run(`reducedMotion.matches = true;
+    stream = { getTracks: () => [], getVideoTracks: () => [{ getSettings: () => ({}) }] };
+    setBusy(false);`);
+  try {
+    for (let count = 1; count <= 100; count++) {
+      await run('capturePhoto()');
+      assert.equal(run('photos.list().length'), count);
+      assert.equal(activeUrls.size, count + 1); // Thumbnails plus the selected original.
+      assert.equal(run('photos.list()[0].width'), 1920);
+      assert.equal(run('photos.list()[0].height'), 1080);
+      await run('returnToCamera()');
+      assert.equal(activeUrls.size, count);
+      assert.equal(run('thumbnailImages.size'), count);
+      assert.equal(elements.get('#gallery-list').children.length, count);
+      assert.equal(run('animations.length'), 0);
+    }
+    for (const { canvas } of encodings) {
+      assert.equal(canvas.width, 0);
+      assert.equal(canvas.height, 0);
+    }
+    for (let remaining = 100; remaining > 0; remaining--) {
+      await run('showPhoto(photos.list()[0])');
+      run(`var downloadUrl = URL.createObjectURL(photos.get(selectedPhotoId).original);
+        downloads.set(downloadUrl, { photoId: selectedPhotoId, timer: setTimeout(() => releaseDownload(downloadUrl), 60000) });
+        deleteSelectedPhoto();`);
+      assert.equal(run('photos.list().length'), remaining - 1);
+      assert.equal(run('thumbnailImages.size'), remaining - 1);
+      assert.equal(run('downloads.size'), 0);
+      assert.equal(activeUrls.size, remaining - 1);
+    }
+    assert.equal(elements.get('#gallery-list').children.length, 0);
+    assert.equal(elements.get('#captured-photo').src, undefined);
+  } finally {
+    run('clearPhoto(); photos.clear(); for (const url of downloads.keys()) releaseDownload(url);');
+  }
+});
+
+test('a capture completing after disconnect does not clear a new capture canvas', async () => {
+  const { run, activeUrls, pending } = setup({ deferPng: true });
+  const connect = () => run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]}; setBusy(false);`);
+  connect();
+  const first = run('capturePhoto()');
+  run('resetCamera()');
+  connect();
+  const second = run('capturePhoto()');
+  try {
+    pending[0].callback(new Blob(['old'], { type: 'image/png' }));
+    await first;
+    assert.equal(pending[1].canvas.width, 1920);
+    assert.equal(pending[1].canvas.height, 1080);
+    pending[1].callback(new Blob(['new'], { type: 'image/png' }));
+    await second;
+    assert.equal(run('photos.list().length'), 1);
+    assert.equal(run('photos.list()[0].original.size'), 3);
+  } finally {
+    run('clearPhoto(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
 });

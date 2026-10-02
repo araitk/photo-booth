@@ -31,7 +31,6 @@ const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!
 const photos = new PhotoStore();
 const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
-const captureCanvas = document.createElement('canvas');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
 let stream: MediaStream | null = null;
@@ -219,6 +218,7 @@ function startShooting() {
 
 async function capturePhoto() {
   if (shutter.disabled || capturePhase !== 'live' || !stream) return;
+  const captureCanvas = document.createElement('canvas');
   capturePhase = 'capturing';
   setBusy(busy);
   const version = ++captureVersion;
