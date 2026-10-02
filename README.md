@@ -1,4 +1,4 @@
-# Photo Booth
+# <img src="assets/logo.svg" width="32" height="32" alt="" align="center" /> Photo Booth
 
 ブラウザで写真を撮影・保存できるカメラアプリ。
 
