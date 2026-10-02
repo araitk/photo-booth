@@ -2,6 +2,8 @@
 
 ブラウザで写真を撮影・保存できるカメラアプリ。
 
+[Photo Booth](https://araitk.github.io/photo-booth/)
+
 ## 機能
 
 - カメラ・解像度の選択（自動・720p・1080p・4K）
