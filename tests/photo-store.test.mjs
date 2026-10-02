@@ -68,8 +68,8 @@ test('undo retains one deleted photo, restores its original order, and releases 
   }
 });
 
-test('PNG filenames include a local timestamp and unique photo number', () => {
-  assert.equal(photoFilename({ id: 12, createdAt: new Date(2026, 9, 2, 3, 4, 5) }), 'photo-20261002-030405-12.png');
+test('PNG filenames include a local timestamp without a photo number', () => {
+  assert.equal(photoFilename({ id: 12, createdAt: new Date(2026, 9, 2, 3, 4, 5) }), 'photo-20261002-030405.png');
 });
 
 test('shrink destination uses the actual thumbnail size and position', () => {

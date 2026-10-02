@@ -41,7 +41,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false, 
         callback(result);
       },
       animate(_frames, options) {
-        assert([180, 1000, 2000].includes(options.duration));
+        assert([180, 300, 2000].includes(options.duration));
         return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
       },
     };
