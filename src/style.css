@@ -103,9 +103,9 @@ h2 span { font-size: 10px; background: #24262a; color: #7e828b; padding: 2px 6px
 .gallery-empty { margin-top: 8px; min-height: 62px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #888e99; }
 .gallery-empty svg { width: 21px; height: 21px; }
 .gallery-empty p { font-size: 11px; }
-.gallery-list { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 8px; padding: 3px 2px 5px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #484c54 transparent; }
-.new-thumbnail-target { position: absolute; right: 2px; bottom: 5px; width: 96px; height: 54px; pointer-events: none; }
-.thumbnail { flex: 0 0 96px; width: 96px; height: 54px; padding: 0; border: 1px solid #ffffff25; border-radius: 5px; background: #151619; overflow: hidden; }
+.gallery-list { display: flex; flex-direction: row-reverse; gap: 8px; margin-top: 8px; padding: 3px 2px 16px; overflow-x: auto; scroll-padding-inline: 4px; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #484c54 transparent; }
+.new-thumbnail-target { position: absolute; right: 2px; bottom: 16px; width: 96px; height: 54px; pointer-events: none; }
+.thumbnail { flex: 0 0 96px; width: 96px; height: 54px; padding: 0; scroll-margin-inline: 2px; border: 1px solid #ffffff25; border-radius: 5px; background: #151619; overflow: hidden; }
 .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .thumbnail[aria-pressed="true"] { outline: 1px solid #d7d9df; outline-offset: 1px; }
 .thumbnail:disabled { cursor: default; }
@@ -140,9 +140,9 @@ h2 span { font-size: 10px; background: #24262a; color: #7e828b; padding: 2px 6px
   .gallery-empty { min-height: 38px; margin-top: 4px; }
   .gallery-empty p { font-size: 10px; margin: 0; }
   .gallery-empty svg { width: 16px; height: 16px; }
-  .gallery-list { gap: 6px; margin-top: 4px; padding-bottom: 3px; }
+  .gallery-list { gap: 6px; margin-top: 4px; padding-bottom: 14px; }
   .thumbnail { flex-basis: 56px; width: 56px; height: 32px; }
-  .new-thumbnail-target { bottom: 3px; width: 56px; height: 32px; }
+  .new-thumbnail-target { bottom: 14px; width: 56px; height: 32px; }
   .photo-actions { gap: 4px; }
   .photo-actions button { width: 26px; height: 26px; padding: 4px; }
   .photo-actions svg { width: 16px; height: 16px; }
