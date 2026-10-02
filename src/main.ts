@@ -486,7 +486,7 @@ async function openCamera() {
       ? 'このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。'
       : errorMessage(error);
   } finally {
-    startButton.innerHTML = 'カメラを開始 <span aria-hidden="true">↗</span>';
+    startButton.textContent = 'カメラを開始';
     if (version === requestVersion) setBusy(false);
   }
 }
