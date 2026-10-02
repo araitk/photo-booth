@@ -1,5 +1,6 @@
 import './style.css';
 import { returnKeyframes } from './return-effects';
+import { PhotoStore, photoFilename, type Photo } from './photo-store';
 
 const video = document.querySelector<HTMLVideoElement>('#camera')!;
 const viewfinder = document.querySelector<HTMLDivElement>('#viewfinder')!;
@@ -17,7 +18,17 @@ const shutter = document.querySelector<HTMLButtonElement>('#shutter')!;
 const photoReview = document.querySelector<HTMLButtonElement>('#photo-review')!;
 const capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!;
 const flash = document.querySelector<HTMLDivElement>('#capture-flash')!;
-const galleryDestination = document.querySelector<HTMLDivElement>('.gallery-empty')!;
+const galleryEmpty = document.querySelector<HTMLDivElement>('.gallery-empty')!;
+const galleryList = document.querySelector<HTMLDivElement>('#gallery-list')!;
+const newThumbnailTarget = document.querySelector<HTMLSpanElement>('#new-thumbnail-target')!;
+const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
+const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
+const backButton = document.querySelector<HTMLButtonElement>('#back-to-camera')!;
+const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
+const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
+const photos = new PhotoStore();
+const thumbnailImages = new Map<number, HTMLImageElement>();
+const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
 const captureCanvas = document.createElement('canvas');
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
@@ -29,6 +40,8 @@ let requestVersion = 0;
 let captureVersion = 0;
 let capturePhase: 'live' | 'capturing' | 'review' | 'returning' = 'live';
 let photoUrl: string | null = null;
+let selectedPhotoId: number | null = null;
+let pendingPhotoId: number | null = null;
 let reviewTimer: ReturnType<typeof setTimeout> | undefined;
 let transitionTimer: ReturnType<typeof setTimeout> | undefined;
 let animations: Animation[] = [];
@@ -38,9 +51,52 @@ function setBusy(value: boolean) {
   startButton.disabled = value;
   resolution.disabled = value || !stream || capturePhase !== 'live';
   shutter.disabled = value || !stream || capturePhase !== 'live' || video.readyState < 2 || !video.videoWidth;
+  const locked = value || capturePhase === 'capturing' || capturePhase === 'returning';
+  backButton.disabled = locked;
+  downloadButton.disabled = locked;
+  deleteButton.disabled = locked;
+  galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = locked || pendingPhotoId !== null; });
 }
 
-function clearPhoto() {
+function thumbnailImage(photo: Photo) {
+  let image = thumbnailImages.get(photo.id);
+  if (!image) {
+    image = document.createElement('img');
+    image.src = photo.thumbnailUrl;
+    image.alt = `写真 ${photo.id}`;
+    image.width = Math.min(240, photo.width);
+    image.height = Math.round(image.width * photo.height / photo.width);
+    thumbnailImages.set(photo.id, image);
+  }
+  return image;
+}
+
+function renderGallery() {
+  for (const id of thumbnailImages.keys()) {
+    if (!photos.get(id)) thumbnailImages.delete(id);
+  }
+  const scroll = galleryList.scrollLeft;
+  galleryList.replaceChildren();
+  const list = photos.list().filter(photo => photo.id !== pendingPhotoId);
+  photoCount.textContent = String(list.length);
+  galleryEmpty.hidden = list.length > 0;
+  galleryList.hidden = list.length === 0;
+  for (const photo of list) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'thumbnail';
+    button.dataset.photoId = String(photo.id);
+    button.setAttribute('aria-label', `写真 ${photo.id} を表示`);
+    button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
+    button.disabled = busy || pendingPhotoId !== null || capturePhase === 'capturing' || capturePhase === 'returning';
+    button.append(thumbnailImage(photo));
+    button.addEventListener('click', () => { void showPhoto(photo); });
+    galleryList.append(button);
+  }
+  galleryList.scrollLeft = scroll;
+}
+
+function clearPhoto(pendingId: number | null = null) {
   captureVersion++;
   clearTimeout(reviewTimer);
   clearTimeout(transitionTimer);
@@ -50,9 +106,64 @@ function clearPhoto() {
   capturedPhoto.removeAttribute('src');
   if (photoUrl) URL.revokeObjectURL(photoUrl);
   photoUrl = null;
+  selectedPhotoId = null;
+  pendingPhotoId = pendingId;
+  photoActions.hidden = true;
   viewfinder.classList.remove('is-review');
+  placeholder.hidden = Boolean(stream);
   capturePhase = 'live';
+  previewRatio = video.videoWidth && stream ? video.videoWidth / video.videoHeight : 16 / 9;
+  fitPreview();
+  renderGallery();
   setBusy(busy);
+}
+
+async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
+  if (!photos.get(photo.id)) return false;
+  clearPhoto(automatic ? photo.id : null);
+  const version = ++captureVersion;
+  selectedPhotoId = photo.id;
+  pendingPhotoId = automatic ? photo.id : null;
+  capturePhase = 'capturing';
+  setBusy(busy);
+  try {
+    photoUrl = URL.createObjectURL(photo.original);
+    capturedPhoto.src = photoUrl;
+    await Promise.all([
+      capturedPhoto.decode(),
+      thumbnailImage(photo).decode().catch(() => {}),
+    ]);
+    if (version !== captureVersion) return false;
+    previewRatio = photo.width / photo.height;
+    fitPreview();
+    photoReview.hidden = false;
+    placeholder.hidden = true;
+    photoActions.hidden = false;
+    viewfinder.classList.add('is-review');
+    capturePhase = 'review';
+    setCameraStatus('PHOTO');
+    actualSettings.hidden = false;
+    actualSettings.textContent = `${photo.width} × ${photo.height}`;
+    renderGallery();
+    if (automatic) galleryList.scrollLeft = 0;
+    setBusy(busy);
+    if (automatic) reviewTimer = setTimeout(() => { void returnToCamera(); }, 3000);
+    return true;
+  } catch {
+    if (version === captureVersion) {
+      clearPhoto();
+      setCameraStatus(stream ? 'LIVE' : 'OFF', Boolean(stream));
+      updateSettings();
+      status.textContent = '写真を表示できませんでした。';
+    }
+    return false;
+  }
+}
+
+function encodeCanvas(canvas: HTMLCanvasElement, type: string, quality?: number): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(value => value ? resolve(value) : reject(new Error('capture-failed')), type, quality);
+  });
 }
 
 async function capturePhoto() {
@@ -76,20 +187,27 @@ async function capturePhoto() {
       const animation = flash.animate([{ opacity: 0.75 }, { opacity: 0 }], { duration: 180 });
       animations.push(animation);
     }
-    const blob = await new Promise<Blob>((resolve, reject) => {
-      captureCanvas.toBlob(value => value ? resolve(value) : reject(new Error('capture-failed')), 'image/png');
-    });
+    const width = captureCanvas.width;
+    const height = captureCanvas.height;
+    const thumbnailCanvas = document.createElement('canvas');
+    thumbnailCanvas.width = Math.min(240, width);
+    thumbnailCanvas.height = Math.max(1, Math.round(height * thumbnailCanvas.width / width));
+    const thumbnailContext = thumbnailCanvas.getContext('2d');
+    if (!thumbnailContext) throw new Error('thumbnail-failed');
+    thumbnailContext.drawImage(captureCanvas, 0, 0, thumbnailCanvas.width, thumbnailCanvas.height);
+    const [blob, thumbnail] = await Promise.all([
+      encodeCanvas(captureCanvas, 'image/png'),
+      encodeCanvas(thumbnailCanvas, 'image/jpeg', 0.8).finally(() => {
+        thumbnailCanvas.width = 0;
+        thumbnailCanvas.height = 0;
+      }),
+    ]);
     if (version !== captureVersion || !stream) return;
-    photoUrl = URL.createObjectURL(blob);
-    capturedPhoto.src = photoUrl;
-    await capturedPhoto.decode();
-    if (version !== captureVersion || !stream) return;
-    photoReview.hidden = false;
-    viewfinder.classList.add('is-review');
-    capturePhase = 'review';
-    setCameraStatus('PHOTO');
-    setBusy(busy);
-    reviewTimer = setTimeout(() => { void returnToCamera(); }, 3000);
+    const photo = photos.add(blob, thumbnail, width, height);
+    if (!await showPhoto(photo, true)) {
+      photos.remove(photo.id);
+      renderGallery();
+    }
   } catch {
     if (version === captureVersion) {
       clearPhoto();
@@ -104,17 +222,21 @@ async function capturePhoto() {
 async function returnToCamera() {
   if (capturePhase !== 'review') return;
   capturePhase = 'returning';
+  setBusy(busy);
   clearTimeout(reviewTimer);
+  const destination = pendingPhotoId === selectedPhotoId
+    ? newThumbnailTarget
+    : galleryList.querySelector<HTMLButtonElement>(`[data-photo-id="${selectedPhotoId}"]`) || newThumbnailTarget;
   const version = captureVersion;
   if (reducedMotion.matches) {
     clearPhoto();
-    if (stream) setCameraStatus('LIVE', true);
+    restoreCameraStatus();
     return;
   }
   const duration = 1000;
   try {
     const animation = photoReview.animate(
-      returnKeyframes(photoReview.getBoundingClientRect(), galleryDestination.getBoundingClientRect()),
+      returnKeyframes(photoReview.getBoundingClientRect(), destination.getBoundingClientRect()),
       { duration, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' },
     );
     animations.push(animation);
@@ -128,8 +250,51 @@ async function returnToCamera() {
   }
   if (version !== captureVersion) return;
   clearPhoto();
-  if (stream) setCameraStatus('LIVE', true);
+  restoreCameraStatus();
 }
+
+function restoreCameraStatus() {
+  setCameraStatus(stream ? 'LIVE' : 'OFF', Boolean(stream));
+  actualSettings.hidden = !stream;
+  updateSettings();
+}
+
+function releaseDownload(url: string) {
+  const download = downloads.get(url);
+  if (!download) return;
+  clearTimeout(download.timer);
+  URL.revokeObjectURL(url);
+  downloads.delete(url);
+}
+
+function downloadSelectedPhoto() {
+  const photo = selectedPhotoId === null ? undefined : photos.get(selectedPhotoId);
+  if (!photo || downloadButton.disabled) return;
+  const url = URL.createObjectURL(photo.original);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  anchor.download = photoFilename(photo);
+  document.body.append(anchor);
+  anchor.click();
+  anchor.remove();
+  downloads.set(url, { photoId: photo.id, timer: setTimeout(() => releaseDownload(url), 60000) });
+}
+
+function deleteSelectedPhoto() {
+  if (selectedPhotoId === null || deleteButton.disabled) return;
+  const id = selectedPhotoId;
+  clearPhoto();
+  photos.remove(id);
+  for (const [url, download] of downloads) {
+    if (download.photoId === id) releaseDownload(url);
+  }
+  renderGallery();
+  restoreCameraStatus();
+}
+
+backButton.addEventListener('click', () => { void returnToCamera(); });
+downloadButton.addEventListener('click', downloadSelectedPhoto);
+deleteButton.addEventListener('click', deleteSelectedPhoto);
 
 shutter.addEventListener('click', () => { void capturePhoto(); });
 photoReview.addEventListener('click', () => { void returnToCamera(); });
@@ -171,6 +336,7 @@ function constraints(value: string, strict = false): MediaTrackConstraints {
 
 function updateSettings() {
   if (!stream) return;
+  if (capturePhase === 'review' || capturePhase === 'returning') return;
   const settings = stream.getVideoTracks()[0].getSettings();
   const width = video.videoWidth || settings.width;
   const height = video.videoHeight || settings.height;
@@ -292,7 +458,14 @@ resolution.addEventListener('change', async () => {
 });
 
 video.addEventListener('resize', () => { updateSettings(); setBusy(busy); });
-window.addEventListener('pagehide', resetCamera);
+window.addEventListener('pagehide', event => {
+  resetCamera();
+  if (!event.persisted) {
+    photos.clear();
+    thumbnailImages.clear();
+    for (const url of downloads.keys()) releaseDownload(url);
+  }
+});
 
 function updateFullscreen() {
   const active = document.fullscreenElement === viewfinder;
