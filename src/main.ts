@@ -691,14 +691,14 @@ async function openCamera() {
     stream.getVideoTracks()[0].addEventListener('ended', () => {
       if (stream !== activeStream) return;
       resetCamera();
-      setCameraStatus('切断');
+      setCameraStatus('DISCONNECTED');
       message.textContent = 'カメラとの接続が切れました。もう一度開始してください。';
     });
   } catch (error) {
     nextStream?.getTracks().forEach(track => track.stop());
     if (version !== requestVersion) return;
     resetCamera();
-    setCameraStatus('接続エラー');
+    setCameraStatus('CONNECTION ERROR');
     message.textContent = !navigator.mediaDevices?.getUserMedia
       ? 'このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。'
       : errorMessage(error);
