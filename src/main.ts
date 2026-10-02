@@ -8,6 +8,7 @@ const mediaSurface = document.querySelector<HTMLDivElement>('#media-surface')!;
 const placeholder = document.querySelector<HTMLDivElement>('#placeholder')!;
 const startButton = document.querySelector<HTMLButtonElement>('#start-camera')!;
 const resolution = document.querySelector<HTMLSelectElement>('#resolution')!;
+const cameraSelect = document.querySelector<HTMLSelectElement>('#camera-select')!;
 const fullscreenButton = document.querySelector<HTMLButtonElement>('#fullscreen')!;
 const actualSettings = document.querySelector<HTMLSpanElement>('#actual-settings')!;
 const liveBadge = document.querySelector<HTMLSpanElement>('#live-badge')!;
@@ -60,6 +61,8 @@ function saveSettings() {
 restoreSettings();
 
 let stream: MediaStream | null = null;
+let cameraDeviceCount = 0;
+let deviceListVersion = 0;
 let busy = false;
 let appliedResolution = resolution.value;
 let previewRatio = 16 / 9;
@@ -89,6 +92,7 @@ function setBusy(value: boolean) {
   previewControls.hidden = !stream;
   startButton.disabled = value;
   resolution.disabled = value || !stream || capturePhase !== 'live';
+  cameraSelect.disabled = value || capturePhase !== 'live' || cameraDeviceCount === 0;
   timer.disabled = value || !stream || capturePhase !== 'live';
   shutter.disabled = value || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
   const counting = capturePhase === 'countdown';
@@ -650,8 +654,36 @@ function errorMessage(error: unknown): string {
   }
 }
 
-async function openCamera() {
-  if (busy || stream) return;
+async function updateCameraList() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  const version = ++deviceListVersion;
+  try {
+    const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'videoinput' && device.deviceId);
+    if (version !== deviceListVersion) return;
+    const selected = stream?.getVideoTracks()[0]?.getSettings().deviceId || cameraSelect.value;
+    cameraSelect.replaceChildren();
+    const automatic = document.createElement('option');
+    automatic.value = '';
+    automatic.textContent = '自動';
+    cameraSelect.append(automatic);
+    devices.forEach((device, index) => {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `カメラ ${index + 1}`;
+      cameraSelect.append(option);
+    });
+    cameraDeviceCount = devices.length;
+    cameraSelect.value = devices.some(device => device.deviceId === selected) ? selected : '';
+    setBusy(busy);
+  } catch {
+    // Device enumeration is optional; the default camera can still be used.
+  }
+}
+
+async function openCamera(deviceId?: string) {
+  if (busy || (stream && deviceId === undefined)) return;
+  const previousStream = stream;
+  const requestedDevice = deviceId ?? cameraSelect.value;
   const version = ++requestVersion;
   let nextStream: MediaStream | null = null;
   setBusy(true);
@@ -662,7 +694,10 @@ async function openCamera() {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('unsupported');
     }
-    nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints(resolution.value) });
+    nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+      ...constraints(resolution.value),
+      ...(requestedDevice ? { deviceId: { exact: requestedDevice } } : {}),
+    } });
     if (version !== requestVersion) {
       nextStream.getTracks().forEach(track => track.stop());
       return;
@@ -674,6 +709,7 @@ async function openCamera() {
       return;
     }
     stream = nextStream;
+    previousStream?.getTracks().forEach(track => track.stop());
     placeholder.hidden = true;
     viewfinder.classList.add('is-live');
     setCameraStatus('LIVE', true);
@@ -693,10 +729,25 @@ async function openCamera() {
       resetCamera();
       setCameraStatus('DISCONNECTED');
       message.textContent = 'カメラとの接続が切れました。もう一度開始してください。';
+      void updateCameraList();
     });
+    await updateCameraList();
   } catch (error) {
     nextStream?.getTracks().forEach(track => track.stop());
     if (version !== requestVersion) return;
+    if (previousStream && stream === previousStream) {
+      video.srcObject = previousStream;
+      try {
+        await video.play();
+        if (version !== requestVersion) return;
+        cameraSelect.value = previousStream.getVideoTracks()[0].getSettings().deviceId || '';
+        setCameraStatus('LIVE', true);
+        status.textContent = 'カメラを切り替えられませんでした。元のカメラを使用します。';
+        return;
+      } catch {
+        // If the old camera is no longer available, show the usual connection error.
+      }
+    }
     resetCamera();
     setCameraStatus('CONNECTION ERROR');
     message.textContent = !navigator.mediaDevices?.getUserMedia
@@ -709,6 +760,11 @@ async function openCamera() {
 }
 
 startButton.addEventListener('click', () => { void openCamera(); });
+cameraSelect.addEventListener('change', async () => {
+  if (stream) await openCamera(cameraSelect.value);
+});
+navigator.mediaDevices?.addEventListener('devicechange', () => { void updateCameraList(); });
+void updateCameraList();
 timer.addEventListener('change', saveSettings);
 
 resolution.addEventListener('change', async () => {

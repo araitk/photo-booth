@@ -80,6 +80,58 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
   return { elements, context, run, finish: () => finishAnimation(), completion: () => finishAnimation, document, activeUrls, encodings, pending };
 }
 
+test('camera selection lists video inputs, switches devices, and keeps the original stream on failure', async () => {
+  const { run, context, elements } = setup();
+  const tracks = [];
+  const requests = [];
+  const makeStream = id => {
+    const track = {
+      stopped: false, stop() { this.stopped = true; }, addEventListener() {},
+      getSettings: () => ({ deviceId: id, width: 1920, height: 1080, frameRate: 30 }),
+    };
+    tracks.push(track);
+    return { getTracks: () => [track], getVideoTracks: () => [track] };
+  };
+  context.navigator.mediaDevices = {
+    enumerateDevices: async () => [
+      {kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'},
+      {kind: 'audioinput', deviceId: 'mic', label: 'マイク'},
+      {kind: 'videoinput', deviceId: 'usb', label: 'USBカメラ'},
+    ],
+    getUserMedia: async options => {
+      requests.push(options);
+      if (options.video.deviceId?.exact === 'unavailable') throw new DOMException('not available', 'NotReadableError');
+      return makeStream(options.video.deviceId?.exact || 'built-in');
+    },
+  };
+  elements.get('#camera').play = async () => {};
+  try {
+    await run('updateCameraList()');
+    const selector = elements.get('#camera-select');
+    assert.deepEqual(selector.children.map(option => option.value), ['', 'built-in', 'usb']);
+    await run('openCamera()');
+    assert.equal(selector.value, 'built-in');
+    assert.equal(selector.disabled, false);
+    selector.value = 'usb';
+    await selector.listeners.get('change')();
+    assert.equal(requests[1].video.deviceId.exact, 'usb');
+    assert.equal(requests[1].audio, false);
+    assert.equal(tracks[0].stopped, true);
+    assert.equal(tracks[1].stopped, false);
+    const active = run('stream');
+    selector.value = 'unavailable';
+    await selector.listeners.get('change')();
+    assert.equal(run('stream'), active);
+    assert.equal(selector.value, 'usb');
+    assert.equal(tracks[1].stopped, false);
+    assert.equal(elements.get('#camera').srcObject, active);
+    run("capturePhase = 'review'; setBusy(false);");
+    assert.equal(selector.disabled, true);
+  } finally {
+    run('resetCamera();');
+  }
+});
+
 test('timer and successfully applied resolution settings persist across reloads, including resolution rollback', async () => {
   const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '5', resolution: '720'})]]);
   const { run, elements } = setup({storage});
