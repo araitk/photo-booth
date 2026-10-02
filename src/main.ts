@@ -67,6 +67,19 @@ let reviewTimer: ReturnType<typeof setTimeout> | undefined;
 let animations: Animation[] = [];
 const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
 let unloadWarningActive = false;
+let helpOpenedByPointer = false;
+const pointerSelectedControls = new WeakSet<HTMLSelectElement>();
+
+for (const control of [cameraSelect, resolution, timer]) {
+  control.addEventListener('pointerdown', () => { pointerSelectedControls.add(control); });
+  control.addEventListener('keydown', () => { pointerSelectedControls.delete(control); });
+}
+
+function releaseSelectFocus(control: HTMLSelectElement) {
+  if (!pointerSelectedControls.has(control)) return;
+  pointerSelectedControls.delete(control);
+  control.blur();
+}
 
 function warnBeforeUnload(event: BeforeUnloadEvent) {
   if (!photos.hasUnsavedPhotos) return;
@@ -519,7 +532,15 @@ async function undoDelete() {
 undoButton.addEventListener('click', () => { void undoDelete(); });
 
 shutter.addEventListener('click', startShooting);
-shortcutHelpButton.addEventListener('click', () => { if (!shortcutHelp.open) shortcutHelp.showModal(); });
+shortcutHelpButton.addEventListener('click', event => {
+  if (shortcutHelp.open) return;
+  helpOpenedByPointer = event.detail > 0;
+  shortcutHelp.showModal();
+});
+shortcutHelp.addEventListener('close', () => {
+  if (helpOpenedByPointer && document.activeElement === shortcutHelpButton) shortcutHelpButton.blur();
+  helpOpenedByPointer = false;
+});
 closeShortcutHelp.addEventListener('click', () => { shortcutHelp.close(); });
 document.addEventListener('keydown', event => {
   const arrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
@@ -542,6 +563,7 @@ document.addEventListener('keydown', event => {
   }
   if (event.key === '?') {
     event.preventDefault();
+    helpOpenedByPointer = false;
     shortcutHelp.showModal();
     return;
   }
@@ -816,6 +838,7 @@ async function openCamera(deviceId?: string) {
 
 startButton.addEventListener('click', () => { void openCamera(); });
 cameraSelect.addEventListener('change', async () => {
+  releaseSelectFocus(cameraSelect);
   if (stream || busy) {
     cameraChangePending = cameraSelect.value;
     await applySelectedCamera();
@@ -827,7 +850,10 @@ cameraSelect.addEventListener('change', async () => {
 });
 navigator.mediaDevices?.addEventListener('devicechange', () => { void updateCameraList(); });
 void updateCameraList();
-timer.addEventListener('change', saveSettings);
+timer.addEventListener('change', () => {
+  releaseSelectFocus(timer);
+  saveSettings();
+});
 
 async function applySelectedCamera() {
   if (cameraChangePending === null || busy || applyingResolution || !['live', 'review'].includes(capturePhase)) return;
@@ -871,6 +897,7 @@ async function applySelectedResolution() {
   }
 }
 resolution.addEventListener('change', async () => {
+  releaseSelectFocus(resolution);
   resolutionChangePending = Boolean(stream) || busy;
   saveSettings();
   await applySelectedResolution();
@@ -907,5 +934,8 @@ async function toggleFullscreen() {
   }
   updateFullscreen();
 }
-fullscreenButton.addEventListener('click', () => { void toggleFullscreen(); });
+fullscreenButton.addEventListener('click', event => {
+  if (event.detail > 0) fullscreenButton.blur();
+  void toggleFullscreen();
+});
 document.addEventListener('fullscreenchange', updateFullscreen);

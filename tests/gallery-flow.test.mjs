@@ -297,6 +297,43 @@ test('resolution and timer remain enabled before starting and during review, and
   }
 });
 
+test('pointer operations release control focus while keyboard operations retain it', async () => {
+  const { elements, document } = setup();
+  for (const selector of ['#camera-select', '#resolution', '#timer']) {
+    const control = elements.get(selector);
+    let blurs = 0;
+    control.blur = () => { blurs++; };
+    control.listeners.get('pointerdown')();
+    await control.listeners.get('change')();
+    assert.equal(blurs, 1);
+    control.listeners.get('pointerdown')();
+    control.listeners.get('keydown')();
+    await control.listeners.get('change')();
+    assert.equal(blurs, 1);
+  }
+  const fullscreen = elements.get('#fullscreen');
+  let fullscreenBlurs = 0;
+  fullscreen.blur = () => { fullscreenBlurs++; };
+  fullscreen.listeners.get('click')({detail: 1});
+  fullscreen.listeners.get('click')({detail: 0});
+  assert.equal(fullscreenBlurs, 1);
+
+  const help = elements.get('#shortcut-help');
+  const button = elements.get('#show-shortcuts');
+  let helpBlurs = 0;
+  button.blur = () => { helpBlurs++; };
+  button.listeners.get('click')({detail: 1});
+  assert.equal(helpBlurs, 0);
+  document.activeElement = button;
+  help.close();
+  help.listeners.get('close')();
+  assert.equal(helpBlurs, 1);
+  button.listeners.get('click')({detail: 0});
+  help.close();
+  help.listeners.get('close')();
+  assert.equal(helpBlurs, 1);
+});
+
 test('invalid or unavailable saved settings do not prevent camera initialization or control changes', () => {
   for (const value of ['broken json', 'null', JSON.stringify({timer: '999', resolution: '8K'})]) {
     const { run, elements } = setup({storage: new Map([['photo-booth.settings.v1', value]])});
