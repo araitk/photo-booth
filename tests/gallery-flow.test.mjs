@@ -23,6 +23,7 @@ function setup({ deferPng = false } = {}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       remove() {},
+      scrollIntoView(options) { this.scrollOptions = options; },
       showModal() { this.open = true; },
       close() { this.open = false; },
       querySelectorAll() { return this.children; },
@@ -74,7 +75,7 @@ function setup({ deferPng = false } = {}) {
   return { elements, context, run, finish: () => finishAnimation(), completion: () => finishAnimation, document, activeUrls, encodings, pending };
 }
 
-test('append each thumbnail and update count only after the return animation finishes', async () => {
+test('append each thumbnail after the return animation finishes while keeping the total count stable', async () => {
   const { elements, run, finish } = setup();
   try {
     for (let count = 1; count <= 2; count++) {
@@ -82,10 +83,10 @@ test('append each thumbnail and update count only after the return animation fin
       await run(`showPhoto(photos.get(${count}), true)`);
       const preparedImage = run(`thumbnailImages.get(${count})`);
       assert.equal(preparedImage.decoded, true);
-      assert.equal(elements.get('#photo-count').textContent, String(count - 1));
+      assert.equal(elements.get('#photo-count').textContent, String(count));
       assert.equal(elements.get('#gallery-list').children.length, count - 1);
       const returning = run('returnToCamera()');
-      assert.equal(elements.get('#photo-count').textContent, String(count - 1));
+      assert.equal(elements.get('#photo-count').textContent, String(count));
       assert.equal(elements.get('#gallery-list').children.length, count - 1);
       finish();
       await returning;
@@ -351,9 +352,99 @@ test('deletion selects the newer neighbor, falls back to the older neighbor, and
     assert.equal(run('selectedPhotoId'), null);
     assert.equal(run('capturePhase'), 'live');
     assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(activeUrls.size, 0);
+    assert.equal(activeUrls.size, 1); // The last deleted thumbnail is retained for undo.
   } finally {
     run('resetCamera(); photos.clear();');
+  }
+});
+
+test('deletion keeps the displayed image, position and gallery stable until its neighbor is ready', async () => {
+  const { run, elements, activeUrls } = setup();
+  try {
+    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(2))');
+    const image = run('capturedPhoto');
+    const thumbnails = elements.get('#gallery-list').children;
+    run(`var finishDecode;
+      var originalCreate = document.createElement;
+      document.createElement = tag => {
+        const image = originalCreate(tag);
+        if (tag === 'img') image.decode = function () {
+          return this.id === 'captured-photo' ? new Promise(resolve => { finishDecode = resolve; }) : Promise.resolve();
+        };
+        return image;
+      };`);
+    const deleting = run('deleteSelectedPhoto()');
+    assert.equal(run('capturedPhoto'), image);
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
+    assert.equal(elements.get('#photo-position').hidden, false);
+    assert.equal(elements.get('#photo-count').hidden, true);
+    assert.equal(elements.get('#gallery-list').children, thumbnails);
+    run('finishDecode()');
+    await deleting;
+    assert.equal(run('selectedPhotoId'), 3);
+    assert.equal(elements.get('#photo-position').textContent, '2 / 2');
+    assert.equal(elements.get('#gallery-list').children.length, 2);
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
+test('undo via keyboard restores and selects the deleted photo and scrolls its thumbnail into view', async () => {
+  const { run, elements, document, activeUrls } = setup();
+  try {
+    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(2))');
+    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
+    let selected = elements.get('#gallery-list').children.find(button => button['aria-pressed'] === 'true');
+    assert.equal(selected.dataset.photoId, '2');
+    assert.equal(selected.scrollOptions.inline, 'nearest');
+    assert.equal(selected.scrollOptions.block, 'nearest');
+    await run('deleteSelectedPhoto()');
+    assert.equal(elements.get('#photo-position').textContent, '2 / 2');
+    assert.equal(elements.get('#undo-delete').hidden, false);
+    assert.equal(elements.get('#undo-delete').disabled, false);
+    run('var undoAttempt; var originalUndo = undoDelete; undoDelete = () => undoAttempt = originalUndo();');
+    const press = extra => document.listeners.get('keydown')({ key: 'z', metaKey: true, preventDefault() {}, ...extra });
+    press({repeat: true});
+    press({target: {closest: () => ({})}});
+    assert.equal(run('undoAttempt'), undefined);
+    press({});
+    await run('undoAttempt');
+    assert.equal(run('selectedPhotoId'), 2);
+    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
+    assert.equal(run('photos.canUndo'), false);
+    assert.equal(elements.get('#undo-delete').hidden, true);
+    assert.deepEqual(elements.get('#gallery-list').children.map(button => button.dataset.photoId), ['3', '2', '1']);
+    selected = elements.get('#gallery-list').children.find(button => button['aria-pressed'] === 'true');
+    assert.equal(selected.scrollOptions.inline, 'nearest');
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
+test('photo position numbers run from oldest to newest and disappear when the preview closes', async () => {
+  const { run, elements } = setup();
+  try {
+    run(`reducedMotion.matches = true;
+      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(1))');
+    assert.equal(elements.get('#photo-position').textContent, '1 / 3');
+    assert.equal(elements.get('#photo-count').hidden, true);
+    await run('showPhoto(photos.get(3))');
+    assert.equal(elements.get('#photo-position').textContent, '3 / 3');
+    await run('returnToCamera()');
+    assert.equal(elements.get('#photo-position').hidden, true);
+    assert.equal(elements.get('#photo-position').textContent, '');
+    assert.equal(elements.get('#photo-count').hidden, false);
+    assert.equal(elements.get('#photo-count').textContent, '3');
+  } finally {
+    run('clearPhoto(); photos.clear();');
   }
 });
 
@@ -387,7 +478,7 @@ test('100 captures retain only thumbnails URLs and release originals, images, do
       assert.equal(run('photos.list().length'), remaining - 1);
       assert.equal(run('thumbnailImages.size'), remaining - 1);
       assert.equal(run('downloads.size'), 0);
-      assert.equal(activeUrls.size, remaining > 1 ? remaining : 0);
+      assert.equal(activeUrls.size, remaining > 1 ? remaining + 1 : 1);
     }
     assert.equal(elements.get('#gallery-list').children.length, 0);
     assert.equal(elements.get('#captured-photo').src, undefined);

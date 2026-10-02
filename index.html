@@ -54,7 +54,7 @@
                 </div>
               </div>
               <section class="gallery" aria-label="撮影した写真">
-        <div class="gallery-heading"><h2>撮影した写真 <span id="photo-count">0</span></h2></div>
+        <div class="gallery-heading"><h2>撮影した写真 <span id="photo-count">0</span><span id="photo-position" role="status" aria-live="polite" hidden></span></h2><button id="undo-delete" type="button" aria-label="削除を元に戻す" aria-keyshortcuts="Meta+z Control+z" title="削除を元に戻す (⌘Z / Ctrl+Z)" hidden>元に戻す</button></div>
         <div class="gallery-empty"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M3 17l6-6 4 4 3-3 5 5" stroke="currentColor" stroke-width="1.3"/></svg><p>撮影した写真がここに並びます</p></div>
         <div class="gallery-list" id="gallery-list" role="group" aria-label="写真一覧" hidden></div>
         <span class="new-thumbnail-target" id="new-thumbnail-target" aria-hidden="true"></span>
@@ -73,6 +73,7 @@
         <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>プレビュー中は隣の写真へ切り替え。カメラ中は←で最新、→で最古の写真を表示</dd></div>
         <div><dt><kbd>S</kbd></dt><dd>選択中の写真をPNGで保存</dd></div>
         <div><dt><kbd>Delete</kbd></dt><dd>選択中の写真を削除</dd></div>
+        <div><dt><kbd>⌘Z</kbd><br><kbd>Ctrl+Z</kbd></dt><dd>直前の1枚の削除を取り消す</dd></div>
         <div><dt><kbd>F</kbd></dt><dd>フルスクリーンを切り替え</dd></div>
         <div><dt><kbd>Enter</kbd></dt><dd>カメラを開始</dd></div>
         <div><dt><kbd>?</kbd></dt><dd>この一覧を表示／閉じる</dd></div>

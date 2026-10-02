@@ -23,10 +23,12 @@ const galleryEmpty = document.querySelector<HTMLDivElement>('.gallery-empty')!;
 const galleryList = document.querySelector<HTMLDivElement>('#gallery-list')!;
 const newThumbnailTarget = document.querySelector<HTMLSpanElement>('#new-thumbnail-target')!;
 const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
+const photoPosition = document.querySelector<HTMLSpanElement>('#photo-position')!;
 const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
 const previewControls = document.querySelector<HTMLDivElement>('.preview-controls')!;
 const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
 const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
+const undoButton = document.querySelector<HTMLButtonElement>('#undo-delete')!;
 const shortcutHelp = document.querySelector<HTMLDialogElement>('#shortcut-help')!;
 const shortcutHelpButton = document.querySelector<HTMLButtonElement>('#show-shortcuts')!;
 const closeShortcutHelp = document.querySelector<HTMLButtonElement>('#close-shortcuts')!;
@@ -74,6 +76,12 @@ function setBusy(value: boolean) {
   const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
+  undoButton.disabled = locked || !photos.canUndo;
+  const reviewing = !photoReview.hidden && capturePhase !== 'returning';
+  photoActions.hidden = !reviewing;
+  downloadButton.hidden = !reviewing;
+  deleteButton.hidden = !reviewing;
+  undoButton.hidden = !photos.canUndo;
   const galleryLocked = value || counting || capturePhase === 'capturing' || (pendingPhotoId !== null && capturePhase !== 'returning');
   galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = galleryLocked; });
 }
@@ -92,15 +100,23 @@ function thumbnailImage(photo: Photo) {
 }
 
 function renderGallery() {
+  const allPhotos = photos.list();
+  const selectedIndex = allPhotos.findIndex(photo => photo.id === selectedPhotoId);
+  photoPosition.hidden = selectedIndex < 0;
+  photoCount.hidden = selectedIndex >= 0;
+  photoPosition.textContent = selectedIndex >= 0 ? `${allPhotos.length - selectedIndex} / ${allPhotos.length}` : '';
+  if (selectedIndex >= 0) photoPosition.setAttribute('aria-label', `${allPhotos.length}枚中${allPhotos.length - selectedIndex}枚目`);
+  else photoPosition.removeAttribute('aria-label');
   for (const id of thumbnailImages.keys()) {
     if (!photos.get(id)) thumbnailImages.delete(id);
   }
   const scroll = galleryList.scrollLeft;
   galleryList.replaceChildren();
-  const list = photos.list().filter(photo => photo.id !== pendingPhotoId);
-  photoCount.textContent = String(list.length);
+  const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
+  photoCount.textContent = String(allPhotos.length);
   galleryEmpty.hidden = list.length > 0;
   galleryList.hidden = list.length === 0;
+  let selectedThumbnail: HTMLButtonElement | undefined;
   for (const photo of list) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -118,8 +134,10 @@ function renderGallery() {
       }
     });
     galleryList.append(button);
+    if (photo.id === selectedPhotoId) selectedThumbnail = button;
   }
   galleryList.scrollLeft = scroll;
+  selectedThumbnail?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
 }
 
 function cancelPhotoAnimations() {
@@ -138,7 +156,6 @@ function clearPhoto(pendingId: number | null = null) {
   photoUrl = null;
   selectedPhotoId = null;
   pendingPhotoId = pendingId;
-  photoActions.hidden = true;
   viewfinder.classList.remove('is-review');
   placeholder.hidden = Boolean(stream);
   capturePhase = 'live';
@@ -183,7 +200,6 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
     fitPreview();
     photoReview.hidden = false;
     placeholder.hidden = true;
-    photoActions.hidden = false;
     viewfinder.classList.add('is-review');
     capturePhase = 'review';
     setCameraStatus('PHOTO');
@@ -326,7 +342,6 @@ async function returnToCamera() {
     : galleryList.querySelector<HTMLButtonElement>(`[data-photo-id="${selectedPhotoId}"]`) || newThumbnailTarget;
   const destinationRect = destination.getBoundingClientRect();
   selectedPhotoId = null;
-  photoActions.hidden = true;
   renderGallery();
   setBusy(busy);
   const version = captureVersion;
@@ -411,11 +426,10 @@ async function deleteSelectedPhoto() {
   const list = photos.list();
   const index = list.findIndex(photo => photo.id === id);
   const next = list[index - 1] || list[index + 1];
-  photos.remove(id);
+  photos.removeUndoable(id);
   for (const [url, download] of downloads) {
     if (download.photoId === id) releaseDownload(url);
   }
-  renderGallery();
   if (next) {
     const shown = await showPhoto(next);
     if (!shown && selectedPhotoId === id) {
@@ -430,15 +444,30 @@ async function deleteSelectedPhoto() {
 
 downloadButton.addEventListener('click', downloadSelectedPhoto);
 deleteButton.addEventListener('click', deleteSelectedPhoto);
+async function undoDelete() {
+  if (undoButton.disabled) return;
+  const photo = photos.undoRemove();
+  if (!photo) return;
+  renderGallery();
+  await showPhoto(photo);
+}
+undoButton.addEventListener('click', () => { void undoDelete(); });
 
 shutter.addEventListener('click', startShooting);
 shortcutHelpButton.addEventListener('click', () => { if (!shortcutHelp.open) shortcutHelp.showModal(); });
 closeShortcutHelp.addEventListener('click', () => { shortcutHelp.close(); });
 document.addEventListener('keydown', event => {
   const arrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
-  if ((event.repeat && !arrowKey) || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  if ((event.repeat && !arrowKey) || event.isComposing || event.altKey) return;
   const target = event.target as HTMLElement | null;
   if (target?.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
+  if (event.ctrlKey || event.metaKey) {
+    if (event.key.toLowerCase() === 'z' && !event.shiftKey && !shortcutHelp.open && !undoButton.disabled && photos.canUndo) {
+      event.preventDefault();
+      void undoDelete();
+    }
+    return;
+  }
   if (shortcutHelp.open) {
     if (event.key === 'Escape' || event.key === '?') {
       event.preventDefault();

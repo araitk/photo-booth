@@ -35,6 +35,39 @@ test('retain original PNG, allocate URLs only for thumbnails, release deleted re
   }
 });
 
+test('undo retains one deleted photo, restores its original order, and releases replaced or cleared history', () => {
+  const revoke = URL.revokeObjectURL;
+  const released = [];
+  URL.revokeObjectURL = url => { released.push(url); revoke(url); };
+  const store = new PhotoStore();
+  try {
+    const add = () => store.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
+    const first = add();
+    const second = add();
+    const third = add();
+    store.removeUndoable(second.id);
+    assert.equal(store.canUndo, true);
+    assert.equal(released.length, 0);
+    assert.equal(store.undoRemove(), second);
+    assert.deepEqual(store.list().map(photo => photo.id), [third.id, second.id, first.id]);
+    assert.equal(store.canUndo, false);
+    assert.equal(store.undoRemove(), null);
+    store.removeUndoable(first.id);
+    store.removeUndoable(third.id);
+    assert.deepEqual(released, [first.thumbnailUrl]);
+    assert.equal(store.undoRemove(), third);
+    assert.equal(store.get(first.id), undefined);
+    store.removeUndoable(second.id);
+    store.clear();
+    assert.equal(store.canUndo, false);
+    assert.equal(store.undoRemove(), null);
+    assert.equal(new Set(released).size, 3);
+  } finally {
+    store.clear();
+    URL.revokeObjectURL = revoke;
+  }
+});
+
 test('PNG filenames include a local timestamp and unique photo number', () => {
   assert.equal(photoFilename({ id: 12, createdAt: new Date(2026, 9, 2, 3, 4, 5) }), 'photo-20261002-030405-12.png');
 });

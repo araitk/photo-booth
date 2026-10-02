@@ -10,6 +10,7 @@ export interface Photo {
 export class PhotoStore {
   private photos = new Map<number, Photo>();
   private nextId = 1;
+  private deletedPhoto: Photo | null = null;
 
   add(original: Blob, thumbnail: Blob, width: number, height: number): Photo {
     const photo: Photo = {
@@ -21,7 +22,25 @@ export class PhotoStore {
   }
 
   get(id: number): Photo | undefined { return this.photos.get(id); }
-  list(): Photo[] { return [...this.photos.values()].reverse(); }
+  list(): Photo[] { return [...this.photos.values()].sort((a, b) => b.id - a.id); }
+
+  get canUndo(): boolean { return this.deletedPhoto !== null; }
+
+  removeUndoable(id: number): void {
+    const photo = this.photos.get(id);
+    if (!photo) return;
+    if (this.deletedPhoto) URL.revokeObjectURL(this.deletedPhoto.thumbnailUrl);
+    this.deletedPhoto = photo;
+    this.photos.delete(id);
+  }
+
+  undoRemove(): Photo | null {
+    const photo = this.deletedPhoto;
+    if (!photo) return null;
+    this.photos.set(photo.id, photo);
+    this.deletedPhoto = null;
+    return photo;
+  }
 
   remove(id: number): void {
     const photo = this.photos.get(id);
@@ -32,6 +51,8 @@ export class PhotoStore {
 
   clear(): void {
     for (const id of this.photos.keys()) this.remove(id);
+    if (this.deletedPhoto) URL.revokeObjectURL(this.deletedPhoto.thumbnailUrl);
+    this.deletedPhoto = null;
   }
 }
 
