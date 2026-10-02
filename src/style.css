@@ -29,6 +29,9 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid
 .brand { display: flex; align-items: center; gap: 4px; color: #f0f0f1; text-decoration: none; font-size: 17px; font-weight: 600; letter-spacing: -.5px; }
 .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; flex-shrink: 0; }
 .brand-mark svg { width: 26px; height: 26px; display: block; }
+.project-footer { flex-shrink: 0; margin-top: 8px; text-align: right; font-size: 11px; line-height: 16px; }
+.project-footer a { color: #888e99; text-decoration: none; }
+.project-footer a:hover { color: #edeef0; text-decoration: underline; }
 .fullscreen-button { position: absolute; z-index: 3; top: 16px; right: 16px; display: flex; align-items: center; gap: 8px; padding: 9px 11px; color: #c7cad0; background: #17181cbf; border: 1px solid #ffffff20; border-radius: 6px; font-size: 11px; }
 .fullscreen-button svg { width: 16px; height: 16px; }
 .fullscreen-button:hover { color: #fff; background: #1b1d20; }
