@@ -24,7 +24,7 @@ const galleryList = document.querySelector<HTMLDivElement>('#gallery-list')!;
 const newThumbnailTarget = document.querySelector<HTMLSpanElement>('#new-thumbnail-target')!;
 const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
 const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
-const backButton = document.querySelector<HTMLButtonElement>('#back-to-camera')!;
+const previewControls = document.querySelector<HTMLDivElement>('.preview-controls')!;
 const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
 const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
 const photos = new PhotoStore();
@@ -49,6 +49,7 @@ let animations: Animation[] = [];
 
 function setBusy(value: boolean) {
   busy = value;
+  previewControls.hidden = !stream;
   startButton.disabled = value;
   resolution.disabled = value || !stream || capturePhase !== 'live';
   timer.disabled = value || !stream || capturePhase !== 'live';
@@ -58,7 +59,6 @@ function setBusy(value: boolean) {
   shutter.setAttribute('aria-label', counting ? '撮影をキャンセル' : '撮影');
   shutter.title = counting ? '撮影をキャンセル' : '撮影';
   const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
-  backButton.disabled = locked;
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
   galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = locked || pendingPhotoId !== null; });
@@ -342,7 +342,6 @@ function deleteSelectedPhoto() {
   restoreCameraStatus();
 }
 
-backButton.addEventListener('click', () => { void returnToCamera(); });
 downloadButton.addEventListener('click', downloadSelectedPhoto);
 deleteButton.addEventListener('click', deleteSelectedPhoto);
 

@@ -27,6 +27,10 @@ video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); d
 .photo-review { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: #101113; transform-origin: center; }
 .photo-review img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .is-review .grid { opacity: 0; }
+.is-review .shutter { visibility: hidden; }
+.is-review .preview-controls { pointer-events: none; }
+.is-review .photo-actions button, .is-review .gallery { pointer-events: auto; }
+.viewfinder:not(.is-live) .grid { display: none; }
 .capture-flash { position: absolute; z-index: 5; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
 .grid { position: absolute; inset: 0; pointer-events: none; }
 .grid i { position: absolute; background: rgba(255,255,255,.15); }
@@ -35,6 +39,7 @@ video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); d
 .grid i:nth-child(3), .grid i:nth-child(4) { left: 0; right: 0; height: 1px; }
 .grid i:nth-child(3) { top: 33.3333%; } .grid i:nth-child(4) { top: 66.6667%; }
 .camera-placeholder { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 40px 24px 170px; }
+.viewfinder:not(.is-live) .camera-placeholder { padding: 24px; }
 .camera-symbol { width: 54px; height: 54px; border-radius: 16px; border: 1px solid #44474c; display: grid; place-items: center; background: #26282ce8; color: #a6a9b0; margin-bottom: 22px; }
 .camera-symbol svg { width: 27px; height: 27px; }
 .camera-placeholder p { font-size: 12px; line-height: 1.8; color: #9d9fa7; margin: 0 0 23px; max-width: 420px; }
