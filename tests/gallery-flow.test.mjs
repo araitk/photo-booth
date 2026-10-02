@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function setup({ deferPng = false } = {}) {
+function setup({ deferPng = false, storage = new Map(), storageBlocked = false } = {}) {
   const elements = new Map();
   let finishAnimation;
   let nextUrl = 0;
@@ -17,7 +17,8 @@ function setup({ deferPng = false } = {}) {
       clientWidth: 1200, clientHeight: 675, hidden: false, disabled: false,
       style: {}, dataset: {}, children: [], scrollLeft: 0,
       classList: { add() {}, remove() {}, toggle() {} },
-      addEventListener() {},
+      listeners: new Map(),
+      addEventListener(name, callback) { this.listeners.set(name, callback); },
       replaceChildren(...children) { this.children = children; },
       append(...children) { this.children.push(...children); },
       setAttribute(name, value) { this[name] = value; },
@@ -55,6 +56,10 @@ function setup({ deferPng = false } = {}) {
   };
   const context = vm.createContext({
     document, navigator: {},
+    localStorage: {
+      getItem(key) { if (storageBlocked) throw new Error('storage blocked'); return storage.get(key) ?? null; },
+      setItem(key, value) { if (storageBlocked) throw new Error('storage blocked'); storage.set(key, value); },
+    },
     window: { matchMedia: () => ({ matches: false }), addEventListener() {} },
     ResizeObserver: class { observe() {} },
     URL: {
@@ -74,6 +79,44 @@ function setup({ deferPng = false } = {}) {
   const run = source => vm.runInContext(source, context);
   return { elements, context, run, finish: () => finishAnimation(), completion: () => finishAnimation, document, activeUrls, encodings, pending };
 }
+
+test('timer and successfully applied resolution settings persist across reloads, including resolution rollback', async () => {
+  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '5', resolution: '720'})]]);
+  const { run, elements } = setup({storage});
+  assert.equal(elements.get('#timer').value, '5');
+  assert.equal(elements.get('#resolution').value, '720');
+  assert.equal(run('appliedResolution'), '720');
+  elements.get('#timer').value = '10';
+  elements.get('#timer').listeners.get('change')();
+  run(`stream = { getVideoTracks: () => [{
+    getConstraints: () => ({}), getSettings: () => ({}),
+    applyConstraints: async value => { if (value.height?.exact === 2160) throw new Error('unsupported'); }
+  }] };`);
+  elements.get('#resolution').value = '1080';
+  await elements.get('#resolution').listeners.get('change')();
+  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '1080');
+  elements.get('#resolution').value = '2160';
+  await elements.get('#resolution').listeners.get('change')();
+  assert.equal(elements.get('#resolution').value, '1080');
+  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '1080');
+  const reloaded = setup({storage});
+  assert.equal(reloaded.elements.get('#timer').value, '10');
+  assert.equal(reloaded.elements.get('#resolution').value, '1080');
+});
+
+test('invalid or unavailable saved settings do not prevent camera initialization or control changes', () => {
+  for (const value of ['broken json', 'null', JSON.stringify({timer: '999', resolution: '8K'})]) {
+    const { run, elements } = setup({storage: new Map([['photo-booth.settings.v1', value]])});
+    // The mock uses 1080 for every initial value; invalid stored values leave the DOM defaults intact.
+    assert.equal(elements.get('#timer').value, '1080');
+    assert.equal(elements.get('#resolution').value, '1080');
+    assert.equal(run('appliedResolution'), '1080');
+  }
+  const { elements } = setup({storageBlocked: true});
+  elements.get('#timer').value = '3';
+  assert.doesNotThrow(() => elements.get('#timer').listeners.get('change')());
+  assert.equal(elements.get('#timer').value, '3');
+});
 
 test('append each thumbnail after the return animation finishes while keeping the total count stable', async () => {
   const { elements, run, finish } = setup();

@@ -36,6 +36,28 @@ const photos = new PhotoStore();
 const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const settingsStorageKey = 'photo-booth.settings.v1';
+
+function restoreSettings() {
+  try {
+    const settings = JSON.parse(localStorage.getItem(settingsStorageKey) || 'null');
+    if (!settings || typeof settings !== 'object') return;
+    if (['0', '3', '5', '10'].includes(settings.timer)) timer.value = settings.timer;
+    if (['auto', '720', '1080', '2160'].includes(settings.resolution)) resolution.value = settings.resolution;
+  } catch {
+    // Keep the defaults if storage is unavailable or the saved data is invalid.
+  }
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem(settingsStorageKey, JSON.stringify({ timer: timer.value, resolution: resolution.value }));
+  } catch {
+    // Camera controls remain usable when the browser blocks storage.
+  }
+}
+
+restoreSettings();
 
 let stream: MediaStream | null = null;
 let busy = false;
@@ -664,6 +686,7 @@ async function openCamera() {
       status.textContent = 'カメラが対応する解像度で開始しました。';
     }
     appliedResolution = resolution.value;
+    saveSettings();
     const activeStream = stream;
     stream.getVideoTracks()[0].addEventListener('ended', () => {
       if (stream !== activeStream) return;
@@ -686,6 +709,7 @@ async function openCamera() {
 }
 
 startButton.addEventListener('click', () => { void openCamera(); });
+timer.addEventListener('change', saveSettings);
 
 resolution.addEventListener('change', async () => {
   if (!stream || busy) return;
@@ -703,6 +727,7 @@ resolution.addEventListener('change', async () => {
     status.textContent = 'この解像度は利用できません。変更前の設定に戻しました。';
     updateSettings();
   } finally {
+    saveSettings();
     setBusy(false);
   }
 });
