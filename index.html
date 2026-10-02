@@ -13,28 +13,32 @@
         <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4.5" width="19" height="15" rx="4"/><circle cx="12" cy="12" r="4"/></svg></span> Photo Booth</div>
         <div class="header-controls">
           <div class="camera-control">
-            <label for="camera-select">カメラ</label>
-            <div class="select-wrap"><select id="camera-select" disabled><option value="">自動</option></select><span aria-hidden="true">⌄</span></div>
+            <label for="camera-select" data-i18n="カメラ">カメラ</label>
+            <div class="select-wrap"><select id="camera-select" disabled><option value="" data-i18n="自動">自動</option></select><span aria-hidden="true">⌄</span></div>
           </div>
           <div class="resolution-control">
-            <label for="resolution">解像度</label>
-            <div class="select-wrap"><select id="resolution"><option value="auto">自動</option><option value="720">HD · 720p</option><option value="1080" selected>Full HD · 1080p</option><option value="2160">4K · 2160p</option></select><span aria-hidden="true">⌄</span></div>
+            <label for="resolution" data-i18n="解像度">解像度</label>
+            <div class="select-wrap"><select id="resolution"><option value="auto" data-i18n="自動">自動</option><option value="720">HD · 720p</option><option value="1080" selected>Full HD · 1080p</option><option value="2160">4K · 2160p</option></select><span aria-hidden="true">⌄</span></div>
           </div>
           <div class="timer-control">
-            <label for="timer">タイマー</label>
-            <div class="select-wrap"><select id="timer"><option value="0">なし</option><option value="3">3秒</option><option value="5">5秒</option><option value="10">10秒</option></select><span aria-hidden="true">⌄</span></div>
+            <label for="timer" data-i18n="タイマー">タイマー</label>
+            <div class="select-wrap"><select id="timer"><option value="0" data-i18n="なし">なし</option><option value="3" data-i18n="3秒">3秒</option><option value="5" data-i18n="5秒">5秒</option><option value="10" data-i18n="10秒">10秒</option></select><span aria-hidden="true">⌄</span></div>
           </div>
-          <button class="shortcut-help-button" id="show-shortcuts" type="button" aria-label="ショートカット一覧" aria-keyshortcuts="Shift+/" title="ショートカット一覧 (?)">?</button>
+          <div class="language-control">
+            <label for="language" data-i18n="言語">言語</label>
+            <div class="select-wrap"><select id="language"><option value="en">English</option><option value="ja">日本語</option></select><span aria-hidden="true">⌄</span></div>
+          </div>
+          <button class="shortcut-help-button" id="show-shortcuts" type="button" aria-label="ショートカット一覧" data-i18n-aria-label="ショートカット一覧" aria-keyshortcuts="Shift+/" title="ショートカット一覧 (?)" data-i18n-title="ショートカット一覧 (?)">?</button>
         </div>
       </header>
       <p class="status-message" id="status" role="status" aria-live="polite"></p>
 
-      <section class="studio" aria-label="カメラ">
+      <section class="studio" aria-label="カメラ" data-i18n-aria-label="カメラ">
         <div class="preview-space" id="preview-space">
           <div class="viewfinder" id="viewfinder">
             <div class="media-surface" id="media-surface">
-              <video id="camera" autoplay muted playsinline aria-label="左右反転したカメラプレビュー"></video>
-              <button class="photo-review" id="photo-review" type="button" aria-label="カメラに戻る" aria-keyshortcuts="Escape ArrowLeft ArrowRight" hidden><img id="captured-photo" alt="撮影した写真"></button>
+              <video id="camera" autoplay muted playsinline aria-label="左右反転したカメラプレビュー" data-i18n-aria-label="左右反転したカメラプレビュー"></video>
+              <button class="photo-review" id="photo-review" type="button" aria-label="カメラに戻る" data-i18n-aria-label="カメラに戻る" aria-keyshortcuts="Escape ArrowLeft ArrowRight" hidden><img id="captured-photo" alt="撮影した写真" data-i18n-alt="撮影した写真"></button>
           <div class="grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
             </div>
             <div class="countdown" id="countdown" role="status" aria-live="assertive" aria-atomic="true" hidden></div>
@@ -44,23 +48,23 @@
             </div>
             <div class="camera-placeholder" id="placeholder">
             <div class="camera-symbol" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M11 8l2-3h6l2 3h5a3 3 0 013 3v13a3 3 0 01-3 3H6a3 3 0 01-3-3V11a3 3 0 013-3h5z" stroke="currentColor" stroke-width="1.5"/><circle cx="16" cy="17" r="6" stroke="currentColor" stroke-width="1.5"/></svg></div>
-            <p id="camera-message">カメラの使用を許可すると映像が表示されます。</p>
-            <button class="start-button" id="start-camera" type="button">カメラを開始</button>
+            <p id="camera-message" data-i18n="カメラの使用を許可すると映像が表示されます。">カメラの使用を許可すると映像が表示されます。</p>
+            <button class="start-button" id="start-camera" type="button" data-i18n="カメラを開始">カメラを開始</button>
           </div>
-            <button class="fullscreen-button" id="fullscreen" type="button" aria-label="フルスクリーン" aria-pressed="false" aria-keyshortcuts="F" title="フルスクリーン (F)"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="fullscreen-button" id="fullscreen" type="button" aria-label="フルスクリーン" data-i18n-aria-label="フルスクリーン" aria-pressed="false" aria-keyshortcuts="F" title="フルスクリーン (F)" data-i18n-title="フルスクリーン (F)"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             <div class="preview-controls" hidden>
               <div class="shooting-controls">
                 <div></div>
-                <button class="shutter" id="shutter" type="button" disabled aria-label="撮影" aria-keyshortcuts="Space" title="撮影 (Space)"><span></span></button>
+                <button class="shutter" id="shutter" type="button" disabled aria-label="撮影" data-i18n-aria-label="撮影" aria-keyshortcuts="Space" title="撮影 (Space)" data-i18n-title="撮影 (Space)"><span></span></button>
                 <div class="photo-actions" id="photo-actions" hidden>
-                  <button id="download-photo" type="button" aria-label="PNGをダウンロード" aria-keyshortcuts="S" title="PNGをダウンロード (S)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg></button>
-                  <button id="delete-photo" type="button" aria-label="写真を削除" title="写真を削除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg></button>
+                  <button id="download-photo" type="button" aria-label="写真をダウンロード" data-i18n-aria-label="写真をダウンロード" aria-keyshortcuts="S" title="写真をダウンロード (S)" data-i18n-title="写真をダウンロード (S)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg></button>
+                  <button id="delete-photo" type="button" aria-label="写真を削除" data-i18n-aria-label="写真を削除" title="写真を削除" data-i18n-title="写真を削除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg></button>
                 </div>
               </div>
-              <section class="gallery" aria-label="写真">
-        <div class="gallery-heading"><h2>写真 <span id="photo-count">0</span><span id="photo-position" role="status" aria-live="polite" hidden></span></h2><button id="undo-delete" type="button" aria-label="削除を元に戻す" aria-keyshortcuts="Meta+z Control+z" title="削除を元に戻す (⌘Z / Ctrl+Z)" hidden>元に戻す</button></div>
-        <div class="gallery-empty"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M3 17l6-6 4 4 3-3 5 5" stroke="currentColor" stroke-width="1.3"/></svg><p>まだ写真がありません</p></div>
-        <div class="gallery-list" id="gallery-list" role="group" aria-label="写真一覧" hidden></div>
+              <section class="gallery" aria-label="写真" data-i18n-aria-label="写真">
+        <div class="gallery-heading"><h2><span class="gallery-title" data-i18n="写真">写真</span> <span id="photo-count">0</span><span id="photo-position" role="status" aria-live="polite" hidden></span></h2><button id="undo-delete" type="button" aria-label="削除した写真を元に戻す" data-i18n-aria-label="削除した写真を元に戻す" aria-keyshortcuts="Meta+z Control+z" title="削除した写真を元に戻す (⌘Z / Ctrl+Z)" data-i18n-title="削除した写真を元に戻す (⌘Z / Ctrl+Z)" hidden data-i18n="元に戻す">元に戻す</button></div>
+        <div class="gallery-empty"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" stroke="currentColor" stroke-width="1.3"/><circle cx="8" cy="8" r="1.5" fill="currentColor"/><path d="M3 17l6-6 4 4 3-3 5 5" stroke="currentColor" stroke-width="1.3"/></svg><p data-i18n="まだ写真がありません">まだ写真がありません</p></div>
+        <div class="gallery-list" id="gallery-list" role="group" aria-label="写真一覧" data-i18n-aria-label="写真一覧" hidden></div>
         <span class="new-thumbnail-target" id="new-thumbnail-target" aria-hidden="true"></span>
       </section>
             </div>
@@ -70,16 +74,16 @@
       </section>
     </main>
     <dialog class="shortcut-help" id="shortcut-help" aria-labelledby="shortcut-help-title">
-      <div class="shortcut-help-heading"><h2 id="shortcut-help-title">ショートカット</h2><button id="close-shortcuts" type="button" aria-label="閉じる" autofocus>×</button></div>
+      <div class="shortcut-help-heading"><h2 id="shortcut-help-title" data-i18n="ショートカット">ショートカット</h2><button id="close-shortcuts" type="button" aria-label="閉じる" data-i18n-aria-label="閉じる" autofocus>×</button></div>
       <dl>
-        <div><dt><kbd>Enter</kbd></dt><dd>カメラを開始</dd></div>
-        <div><dt><kbd>F</kbd></dt><dd>全画面表示を切り替え</dd></div>
-        <div><dt><kbd>Space</kbd></dt><dd>撮影／タイマーをキャンセル／プレビューを閉じる</dd></div>
-        <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>プレビュー写真を切り替え</dd></div>
-        <div><dt><kbd>S</kbd></dt><dd>選択中の写真を保存</dd></div>
-        <div><dt><kbd>Delete</kbd></dt><dd>選択中の写真を削除</dd></div>
-        <div><dt><kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd></dt><dd>直前に削除した写真を元に戻す</dd></div>
-        <div><dt><kbd>?</kbd></dt><dd>この一覧を表示／閉じる</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd data-i18n="カメラを開始">カメラを開始</dd></div>
+        <div><dt><kbd>F</kbd></dt><dd data-i18n="全画面表示を切り替え">全画面表示を切り替え</dd></div>
+        <div><dt><kbd>Space</kbd></dt><dd data-i18n="撮影／タイマーをキャンセル／プレビューを閉じる">撮影／タイマーをキャンセル／プレビューを閉じる</dd></div>
+        <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd data-i18n="プレビュー写真を切り替え">プレビュー写真を切り替え</dd></div>
+        <div><dt><kbd>S</kbd></dt><dd data-i18n="選択中の写真を保存">選択中の写真を保存</dd></div>
+        <div><dt><kbd>Delete</kbd></dt><dd data-i18n="選択中の写真を削除">選択中の写真を削除</dd></div>
+        <div><dt><kbd>⌘Z</kbd> / <kbd>Ctrl+Z</kbd></dt><dd data-i18n="直前に削除した写真を元に戻す">直前に削除した写真を元に戻す</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd data-i18n="この一覧を表示／閉じる">この一覧を表示／閉じる</dd></div>
       </dl>
     </dialog>
     <script type="module" src="/src/main.ts"></script>

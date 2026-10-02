@@ -1,7 +1,10 @@
+import type { Language } from './i18n';
+
 interface SavedSettings {
   timer: string;
   resolution: string;
   cameraId: string;
+  language?: Language;
 }
 
 const settingsStorageKey = 'photo-booth.settings.v1';
@@ -14,6 +17,7 @@ export function loadSettings(): Partial<SavedSettings> {
     if (['0', '3', '5', '10'].includes(saved.timer)) settings.timer = saved.timer;
     if (['auto', '720', '1080', '2160'].includes(saved.resolution)) settings.resolution = saved.resolution;
     if (typeof saved.cameraId === 'string') settings.cameraId = saved.cameraId;
+    if (saved.language === 'ja' || saved.language === 'en') settings.language = saved.language;
     return settings;
   } catch {
     // Keep the defaults if storage is unavailable or the saved data is invalid.

@@ -1,6 +1,11 @@
 import { returnKeyframes } from './return-effects';
 import { PhotoStore, photoFilename, type Photo } from './photo-store';
 import { loadSettings, persistSettings } from './settings';
+import { applyLanguage, getLanguage, initLanguage, t, translateCurrentText, type Language } from './i18n';
+
+const savedSettings = loadSettings();
+initLanguage(savedSettings.language);
+applyLanguage();
 
 const video = document.querySelector<HTMLVideoElement>('#camera')!;
 const viewfinder = document.querySelector<HTMLDivElement>('#viewfinder')!;
@@ -10,6 +15,8 @@ const placeholder = document.querySelector<HTMLDivElement>('#placeholder')!;
 const startButton = document.querySelector<HTMLButtonElement>('#start-camera')!;
 const resolution = document.querySelector<HTMLSelectElement>('#resolution')!;
 const cameraSelect = document.querySelector<HTMLSelectElement>('#camera-select')!;
+const languageSelect = document.querySelector<HTMLSelectElement>('#language')!;
+languageSelect.value = getLanguage();
 const fullscreenButton = document.querySelector<HTMLButtonElement>('#fullscreen')!;
 const actualSettings = document.querySelector<HTMLSpanElement>('#actual-settings')!;
 const liveBadge = document.querySelector<HTMLSpanElement>('#live-badge')!;
@@ -38,13 +45,12 @@ const photos = new PhotoStore();
 const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const savedSettings = loadSettings();
 if (savedSettings.timer !== undefined) timer.value = savedSettings.timer;
 if (savedSettings.resolution !== undefined) resolution.value = savedSettings.resolution;
 let preferredCameraId = savedSettings.cameraId ?? '';
 
 function saveSettings() {
-  persistSettings({ timer: timer.value, resolution: resolution.value, cameraId: preferredCameraId });
+  persistSettings({ timer: timer.value, resolution: resolution.value, cameraId: preferredCameraId, language: getLanguage() });
 }
 
 let stream: MediaStream | null = null;
@@ -70,7 +76,7 @@ let unloadWarningActive = false;
 let helpOpenedByPointer = false;
 const pointerSelectedControls = new WeakSet<HTMLSelectElement>();
 
-for (const control of [cameraSelect, resolution, timer]) {
+for (const control of [cameraSelect, resolution, timer, languageSelect]) {
   control.addEventListener('pointerdown', () => { pointerSelectedControls.add(control); });
   control.addEventListener('keydown', () => { pointerSelectedControls.delete(control); });
 }
@@ -120,8 +126,8 @@ function setBusy(value: boolean) {
   shutter.disabled = value || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
   const counting = capturePhase === 'countdown';
   shutter.classList.toggle('is-counting', counting);
-  shutter.setAttribute('aria-label', counting ? '撮影をキャンセル' : '撮影');
-  shutter.title = counting ? '撮影をキャンセル (Space / Esc)' : '撮影 (Space)';
+  shutter.setAttribute('aria-label', counting ? t("撮影をキャンセル") : t("撮影"));
+  shutter.title = counting ? t("撮影をキャンセル (Space / Esc)") : t("撮影 (Space)");
   const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
@@ -146,18 +152,18 @@ function thumbnailImage(photo: Photo) {
   if (!image) {
     image = document.createElement('img');
     image.src = photo.thumbnailUrl;
-    image.alt = `写真 ${photo.id}`;
     image.width = Math.min(240, photo.width);
     image.height = Math.round(image.width * photo.height / photo.width);
     thumbnailImages.set(photo.id, image);
   }
+  image.alt = t('写真 {number}', { number: photo.id });
   return image;
 }
 
 function updateDownloadBadge(button: HTMLButtonElement, photo: Photo) {
   const downloaded = Boolean(photo.downloadStarted);
   button.dataset.downloaded = String(downloaded);
-  button.setAttribute('aria-label', `写真 ${photo.id} を表示${downloaded ? '（ダウンロード済み）' : ''}`);
+  button.setAttribute('aria-label', t(downloaded ? '写真 {number} を表示（ダウンロード済み）' : '写真 {number} を表示', { number: photo.id }));
 }
 
 function updateThumbnailMetadata(button: HTMLButtonElement, photo: Photo, number: number) {
@@ -174,7 +180,7 @@ function renderGallery() {
   photoPosition.hidden = selectedIndex < 0;
   photoCount.hidden = selectedIndex >= 0;
   photoPosition.textContent = selectedIndex >= 0 ? `${allPhotos.length - selectedIndex} / ${allPhotos.length}` : '';
-  if (selectedIndex >= 0) photoPosition.setAttribute('aria-label', `${allPhotos.length}枚中${allPhotos.length - selectedIndex}枚目`);
+  if (selectedIndex >= 0) photoPosition.setAttribute('aria-label', t('{total}枚中{number}枚目', { total: allPhotos.length, number: allPhotos.length - selectedIndex }));
   else photoPosition.removeAttribute('aria-label');
   for (const id of thumbnailImages.keys()) {
     if (!photos.get(id)) thumbnailImages.delete(id);
@@ -249,13 +255,13 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
     nextUrl = URL.createObjectURL(photo.original);
     const nextImage = document.createElement('img');
     nextImage.id = 'captured-photo';
-    nextImage.alt = '撮影した写真';
     nextImage.src = nextUrl;
     await Promise.all([
       nextImage.decode(),
       thumbnailImage(photo).decode().catch(() => {}),
     ]);
     if (version !== captureVersion) return false;
+    nextImage.alt = t('撮影した写真');
     cancelPhotoAnimations();
     const previousImage = capturedPhoto;
     const previousUrl = photoUrl;
@@ -292,7 +298,7 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
         setCameraStatus(stream ? 'LIVE' : 'OFF', Boolean(stream));
         updateSettings();
       }
-      status.textContent = '写真を表示できませんでした。';
+      status.textContent = t("写真を表示できませんでした。");
     }
     return false;
   } finally {
@@ -359,7 +365,7 @@ async function capturePhoto() {
   const context = captureCanvas.getContext('2d');
   if (!context) {
     clearPhoto();
-    status.textContent = '撮影できませんでした。もう一度お試しください。';
+    status.textContent = t("撮影できませんでした。もう一度お試しください。");
     return;
   }
   captureCanvas.width = video.videoWidth;
@@ -396,7 +402,7 @@ async function capturePhoto() {
   } catch {
     if (version === captureVersion) {
       clearPhoto();
-      status.textContent = '撮影できませんでした。もう一度お試しください。';
+      status.textContent = t("撮影できませんでした。もう一度お試しください。");
     }
   } finally {
     captureCanvas.width = 0;
@@ -439,7 +445,7 @@ async function returnToCamera() {
   photoUrl = null;
   capturedPhoto = document.createElement('img');
   capturedPhoto.id = 'captured-photo';
-  capturedPhoto.alt = '撮影した写真';
+  capturedPhoto.alt = t("撮影した写真");
   photoReview.replaceChildren(capturedPhoto);
   photoReview.hidden = true;
   const duration = 1000;
@@ -704,13 +710,13 @@ function resetCamera() {
 }
 
 function errorMessage(error: unknown): string {
-  if (!(error instanceof DOMException)) return 'カメラを開始できませんでした。もう一度お試しください。';
+  if (!(error instanceof DOMException)) return t("カメラを開始できませんでした。もう一度お試しください。");
   switch (error.name) {
-    case 'NotAllowedError': return 'カメラの使用を許可してください。ブラウザのサイト設定から変更できます。';
-    case 'NotFoundError': return 'カメラが見つかりません。接続を確認してください。';
-    case 'NotReadableError': return 'カメラを使用できません。他のアプリで使用中でないか確認してください。';
-    case 'OverconstrainedError': return '指定した設定を利用できません。別の解像度をお試しください。';
-    default: return 'カメラを開始できませんでした。接続とブラウザの設定を確認してください。';
+    case 'NotAllowedError': return t("カメラの使用を許可してください。ブラウザのサイト設定から変更できます。");
+    case 'NotFoundError': return t("カメラが見つかりません。接続を確認してください。");
+    case 'NotReadableError': return t("カメラを使用できません。他のアプリで使用中でないか確認してください。");
+    case 'OverconstrainedError': return t("指定した設定を利用できません。別の解像度をお試しください。");
+    default: return t("カメラを開始できませんでした。接続とブラウザの設定を確認してください。");
   }
 }
 
@@ -724,12 +730,12 @@ async function updateCameraList() {
     cameraSelect.replaceChildren();
     const automatic = document.createElement('option');
     automatic.value = '';
-    automatic.textContent = '自動';
+    automatic.textContent = t("自動");
     cameraSelect.append(automatic);
     devices.forEach((device, index) => {
       const option = document.createElement('option');
       option.value = device.deviceId;
-      option.textContent = device.label || `カメラ ${index + 1}`;
+      option.textContent = device.label || t('カメラ {number}', { number: index + 1 });
       cameraSelect.append(option);
     });
     cameraDeviceCount = devices.length;
@@ -753,7 +759,7 @@ async function openCamera(deviceId?: string) {
   const version = ++requestVersion;
   let nextStream: MediaStream | null = null;
   setBusy(true);
-  startButton.textContent = '接続中…';
+  startButton.textContent = t("接続中…");
   setCameraStatus('CONNECTING');
   status.textContent = '';
   try {
@@ -796,7 +802,7 @@ async function openCamera(deviceId?: string) {
     resolutionChangePending = resolution.value !== requestedResolution;
     if (!resolutionChangePending && fallback) {
       resolution.value = 'auto';
-      status.textContent = 'カメラが対応する解像度で開始しました。';
+      status.textContent = t("カメラが対応する解像度で開始しました。");
     }
     preferredCameraId = settings.deviceId || '';
     saveSettings();
@@ -805,7 +811,7 @@ async function openCamera(deviceId?: string) {
       if (stream !== activeStream) return;
       resetCamera();
       setCameraStatus('DISCONNECTED');
-      message.textContent = 'カメラとの接続が切れました。もう一度開始してください。';
+      message.textContent = t("カメラとの接続が切れました。もう一度開始してください。");
       void updateCameraList();
     });
     await updateCameraList();
@@ -819,7 +825,7 @@ async function openCamera(deviceId?: string) {
         if (version !== requestVersion) return;
         cameraSelect.value = cameraChangePending ?? (previousStream.getVideoTracks()[0].getSettings().deviceId || '');
         setCameraStatus(capturePhase === 'review' ? 'PHOTO' : 'LIVE', capturePhase !== 'review');
-        status.textContent = 'カメラを切り替えられませんでした。元のカメラを使用します。';
+        status.textContent = t("カメラを切り替えられませんでした。元のカメラを使用します。");
         return;
       } catch {
         // If the old camera is no longer available, show the usual connection error.
@@ -828,10 +834,10 @@ async function openCamera(deviceId?: string) {
     resetCamera();
     setCameraStatus('CONNECTION ERROR');
     message.textContent = !navigator.mediaDevices?.getUserMedia
-      ? 'このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。'
+      ? t("このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。")
       : errorMessage(error);
   } finally {
-    startButton.textContent = 'カメラを開始';
+    startButton.textContent = t("カメラを開始");
     if (version === requestVersion) setBusy(false);
   }
 }
@@ -887,7 +893,7 @@ async function applySelectedResolution() {
     try { await track.applyConstraints(previousConstraints); } catch { /* Show the actual remaining settings below. */ }
     if (stream !== activeStream || version !== requestVersion) return;
     if (resolution.value === requested) resolution.value = appliedResolution;
-    status.textContent = 'この解像度は利用できません。変更前の設定に戻しました。';
+    status.textContent = t("この解像度は利用できません。変更前の設定に戻しました。");
     updateSettings();
   } finally {
     applyingResolution = false;
@@ -916,7 +922,7 @@ window.addEventListener('pagehide', event => {
 
 function updateFullscreen() {
   const active = document.fullscreenElement === viewfinder;
-  const label = active ? 'フルスクリーンを終了' : 'フルスクリーン';
+  const label = active ? t("フルスクリーンを終了") : t("フルスクリーン");
   fullscreenButton.setAttribute('aria-label', label);
   fullscreenButton.setAttribute('aria-pressed', String(active));
   fullscreenButton.title = `${label} (F)`;
@@ -924,13 +930,13 @@ function updateFullscreen() {
 }
 
 fullscreenButton.disabled = !document.fullscreenEnabled || !viewfinder.requestFullscreen;
-if (fullscreenButton.disabled) fullscreenButton.title = 'このブラウザではフルスクリーンを利用できません';
+if (fullscreenButton.disabled) fullscreenButton.title = t("このブラウザではフルスクリーンを利用できません");
 async function toggleFullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
     else await viewfinder.requestFullscreen();
   } catch {
-    status.textContent = 'フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。';
+    status.textContent = t("フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。");
   }
   updateFullscreen();
 }
@@ -939,3 +945,20 @@ fullscreenButton.addEventListener('click', event => {
   void toggleFullscreen();
 });
 document.addEventListener('fullscreenchange', updateFullscreen);
+
+languageSelect.addEventListener('change', () => {
+  releaseSelectFocus(languageSelect);
+  const currentMessage = message.textContent ?? '';
+  const currentStartLabel = startButton.textContent ?? '';
+  applyLanguage(languageSelect.value as Language);
+  status.textContent = translateCurrentText(status.textContent ?? '');
+  message.textContent = translateCurrentText(currentMessage);
+  startButton.textContent = translateCurrentText(currentStartLabel);
+  capturedPhoto.alt = t('撮影した写真');
+  saveSettings();
+  setBusy(busy);
+  updateFullscreen();
+  if (fullscreenButton.disabled) fullscreenButton.title = t('このブラウザではフルスクリーンを利用できません');
+  renderGallery();
+  void updateCameraList();
+});

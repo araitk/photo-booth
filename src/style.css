@@ -24,7 +24,7 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid
 .header-controls { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 24px; }
 .header { flex-wrap: wrap; }
 .camera-control { min-width: 0; }
-.camera-control label { display: block; color: #777b83; font-size: 10px; margin-bottom: 7px; }
+.camera-control label, .language-control label { display: block; color: #777b83; font-size: 10px; margin-bottom: 7px; }
 .camera-control select { width: 200px; text-overflow: ellipsis; }
 .brand { display: flex; align-items: center; gap: 11px; color: #f0f0f1; text-decoration: none; font-size: 17px; font-weight: 600; letter-spacing: -.5px; }
 .brand-mark { width: 29px; height: 29px; display: grid; place-items: center; flex-shrink: 0; }
@@ -100,7 +100,7 @@ select:disabled { opacity: .5; }
 #undo-delete:not(:disabled):hover { color: #fff; }
 #undo-delete:disabled { cursor: default; }
 h2 { font-size: 12px; font-weight: 500; margin: 0; display: flex; align-items: center; gap: 10px; color: #b7bac1; }
-h2 span { font-size: 10px; background: #24262a; color: #7e828b; padding: 2px 6px; border-radius: 4px; }
+h2 span:not(.gallery-title) { font-size: 10px; background: #24262a; color: #7e828b; padding: 2px 6px; border-radius: 4px; }
 .gallery-empty { margin-top: 8px; height: 73px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #888e99; }
 .gallery-empty svg { width: 21px; height: 21px; }
 .gallery-empty p { font-size: 11px; }

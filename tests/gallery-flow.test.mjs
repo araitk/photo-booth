@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function setup({ deferPng = false, storage = new Map(), storageBlocked = false } = {}) {
+function setup({ deferPng = false, storage = new Map(), storageBlocked = false, browserLanguage = 'ja-JP' } = {}) {
   const elements = new Map();
   let finishAnimation;
   let nextUrl = 0;
@@ -47,6 +47,8 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
   }
   const document = {
     body: element(),
+    documentElement: {},
+    querySelectorAll: () => [],
     fullscreenEnabled: false, fullscreenElement: null,
     querySelector(selector) {
       if (!elements.has(selector)) elements.set(selector, element());
@@ -57,7 +59,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
     addEventListener(name, callback) { this.listeners.set(name, callback); },
   };
   const context = vm.createContext({
-    document, navigator: {},
+    document, navigator: { language: browserLanguage },
     localStorage: {
       getItem(key) { if (storageBlocked) throw new Error('storage blocked'); return storage.get(key) ?? null; },
       setItem(key, value) { if (storageBlocked) throw new Error('storage blocked'); storage.set(key, value); },
@@ -74,7 +76,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
     },
     Date, Blob, setTimeout, clearTimeout, DOMException,
   });
-  for (const file of ['photo-store.ts', 'return-effects.ts', 'settings.ts', 'main.ts']) {
+  for (const file of ['photo-store.ts', 'return-effects.ts', 'i18n.ts', 'settings.ts', 'main.ts']) {
     const source = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8')
       .replace(/^import .*;\n/gm, '').replaceAll('export ', '');
     const compiled = ts.transpileModule(source, {
@@ -292,6 +294,49 @@ test('resolution and timer remain enabled before starting and during review, and
     assert.equal(run('capturedPhoto'), image);
     assert.equal(elements.get('#photo-review').hidden, false);
     assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '2160');
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
+});
+
+test('language defaults to the browser, respects saved choices, and tolerates invalid or blocked storage', () => {
+  for (const browserLanguage of ['en-US', 'fr-FR', 'ja-JP']) {
+    const { run, document, elements } = setup({browserLanguage});
+    const expected = browserLanguage.startsWith('ja') ? 'ja' : 'en';
+    assert.equal(run('getLanguage()'), expected);
+    assert.equal(document.documentElement.lang, expected);
+    assert.equal(elements.get('#language').value, expected);
+  }
+  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({language: 'ja'})]]);
+  assert.equal(setup({browserLanguage: 'en-US', storage}).run('getLanguage()'), 'ja');
+  storage.set('photo-booth.settings.v1', JSON.stringify({language: 'invalid'}));
+  assert.equal(setup({browserLanguage: 'en-US', storage}).run('getLanguage()'), 'en');
+  assert.equal(setup({browserLanguage: 'en-US', storageBlocked: true}).run('getLanguage()'), 'en');
+});
+
+test('switching languages updates photo metadata and errors without interrupting the preview and persists on reload', async () => {
+  const storage = new Map();
+  const { run, elements, activeUrls } = setup({storage});
+  try {
+    run('photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080); photos.markDownloaded(1);');
+    await run('showPhoto(photos.get(1))');
+    run("status.textContent = errorMessage(new DOMException('', 'NotFoundError')); message.textContent = errorMessage(new DOMException('', 'NotAllowedError')); startButton.textContent = t('カメラを開始');");
+    const originalUrls = [...activeUrls.keys()];
+    elements.get('#language').value = 'en';
+    elements.get('#language').listeners.get('change')();
+    assert.equal(run('capturePhase'), 'review');
+    assert.equal(run('selectedPhotoId'), 1);
+    assert.deepEqual([...activeUrls.keys()], originalUrls);
+    assert.equal(elements.get('#gallery-list').children[0]['aria-label'], 'View photo 1 (downloaded)');
+    assert.equal(elements.get('#photo-position')['aria-label'], 'Photo 1 of 1');
+    assert.equal(elements.get('#status').textContent, 'No camera found. Check the connection.');
+    assert.equal(elements.get('#camera-message').textContent, 'Allow camera access in your browser’s site settings.');
+    assert.equal(elements.get('#start-camera').textContent, 'Start camera');
+    assert.equal(setup({storage, browserLanguage: 'ja-JP'}).run('getLanguage()'), 'en');
+    elements.get('#language').value = 'ja';
+    elements.get('#language').listeners.get('change')();
+    assert.equal(elements.get('#status').textContent, 'カメラが見つかりません。接続を確認してください。');
+    assert.equal(elements.get('#gallery-list').children[0]['aria-label'], '写真 1 を表示（ダウンロード済み）');
   } finally {
     run('resetCamera(); photos.clear();');
   }
