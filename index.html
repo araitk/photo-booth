@@ -11,6 +11,10 @@
       <header class="header">
         <div class="brand"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2.5" y="4.5" width="19" height="15" rx="4"/><circle cx="12" cy="12" r="4"/></svg></span> Photo Booth</div>
         <div class="header-controls">
+          <div class="timer-control">
+            <label for="timer">タイマー</label>
+            <div class="select-wrap"><select id="timer" disabled><option value="0">なし</option><option value="3">3秒</option><option value="5">5秒</option><option value="10">10秒</option></select><span aria-hidden="true">⌄</span></div>
+          </div>
           <div class="resolution-control">
             <label for="resolution">解像度</label>
             <div class="select-wrap"><select id="resolution" disabled><option value="auto">自動</option><option value="720">HD · 720p</option><option value="1080" selected>Full HD · 1080p</option><option value="2160">4K · 2160p</option></select><span aria-hidden="true">⌄</span></div>
@@ -27,6 +31,7 @@
               <button class="photo-review" id="photo-review" type="button" aria-label="カメラに戻る" hidden><img id="captured-photo" alt="撮影した写真"></button>
           <div class="grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
             </div>
+            <div class="countdown" id="countdown" role="status" aria-live="assertive" aria-atomic="true" hidden></div>
             <div class="preview-status">
               <span class="live-badge" id="live-badge" role="status" aria-live="polite"><span aria-hidden="true"></span> OFF</span>
               <span class="camera-details" id="actual-settings" hidden></span>

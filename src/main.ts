@@ -15,6 +15,8 @@ const liveBadge = document.querySelector<HTMLSpanElement>('#live-badge')!;
 const message = document.querySelector<HTMLParagraphElement>('#camera-message')!;
 const status = document.querySelector<HTMLParagraphElement>('#status')!;
 const shutter = document.querySelector<HTMLButtonElement>('#shutter')!;
+const timer = document.querySelector<HTMLSelectElement>('#timer')!;
+const countdown = document.querySelector<HTMLDivElement>('#countdown')!;
 const photoReview = document.querySelector<HTMLButtonElement>('#photo-review')!;
 const capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!;
 const flash = document.querySelector<HTMLDivElement>('#capture-flash')!;
@@ -38,7 +40,8 @@ let appliedResolution = resolution.value;
 let previewRatio = 16 / 9;
 let requestVersion = 0;
 let captureVersion = 0;
-let capturePhase: 'live' | 'capturing' | 'review' | 'returning' = 'live';
+let capturePhase: 'live' | 'countdown' | 'capturing' | 'review' | 'returning' = 'live';
+let countdownTimer: ReturnType<typeof setTimeout> | undefined;
 let photoUrl: string | null = null;
 let selectedPhotoId: number | null = null;
 let pendingPhotoId: number | null = null;
@@ -50,8 +53,13 @@ function setBusy(value: boolean) {
   busy = value;
   startButton.disabled = value;
   resolution.disabled = value || !stream || capturePhase !== 'live';
-  shutter.disabled = value || !stream || capturePhase !== 'live' || video.readyState < 2 || !video.videoWidth;
-  const locked = value || capturePhase === 'capturing' || capturePhase === 'returning';
+  timer.disabled = value || !stream || capturePhase !== 'live';
+  shutter.disabled = value || !stream || (capturePhase !== 'live' && capturePhase !== 'countdown') || video.readyState < 2 || !video.videoWidth;
+  const counting = capturePhase === 'countdown';
+  shutter.classList.toggle('is-counting', counting);
+  shutter.setAttribute('aria-label', counting ? '撮影をキャンセル' : '撮影');
+  shutter.title = counting ? '撮影をキャンセル' : '撮影';
+  const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
   backButton.disabled = locked;
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
@@ -88,7 +96,7 @@ function renderGallery() {
     button.dataset.photoId = String(photo.id);
     button.setAttribute('aria-label', `写真 ${photo.id} を表示`);
     button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
-    button.disabled = busy || pendingPhotoId !== null || capturePhase === 'capturing' || capturePhase === 'returning';
+    button.disabled = busy || pendingPhotoId !== null || capturePhase === 'countdown' || capturePhase === 'capturing' || capturePhase === 'returning';
     button.append(thumbnailImage(photo));
     button.addEventListener('click', () => { void showPhoto(photo); });
     galleryList.append(button);
@@ -97,6 +105,7 @@ function renderGallery() {
 }
 
 function clearPhoto(pendingId: number | null = null) {
+  cancelCountdown();
   captureVersion++;
   clearTimeout(reviewTimer);
   clearTimeout(transitionTimer);
@@ -166,8 +175,50 @@ function encodeCanvas(canvas: HTMLCanvasElement, type: string, quality?: number)
   });
 }
 
+function cancelCountdown() {
+  clearTimeout(countdownTimer);
+  countdownTimer = undefined;
+  countdown.hidden = true;
+  countdown.textContent = '';
+  if (capturePhase === 'countdown') {
+    capturePhase = 'live';
+    setBusy(busy);
+  }
+}
+
+function startShooting() {
+  if (capturePhase === 'countdown') {
+    cancelCountdown();
+    return;
+  }
+  if (shutter.disabled || capturePhase !== 'live' || !stream) return;
+  const seconds = Number(timer.value);
+  if (![3, 5, 10].includes(seconds)) {
+    void capturePhoto();
+    return;
+  }
+  capturePhase = 'countdown';
+  status.textContent = '';
+  setBusy(busy);
+  const deadline = Date.now() + seconds * 1000;
+  const tick = () => {
+    if (capturePhase !== 'countdown') return;
+    const remaining = Math.max(0, deadline - Date.now());
+    if (remaining === 0) {
+      cancelCountdown();
+      void capturePhoto();
+      return;
+    }
+    const secondsLeft = Math.ceil(remaining / 1000);
+    countdown.hidden = false;
+    countdown.textContent = String(secondsLeft);
+    countdownTimer = setTimeout(tick, remaining - (secondsLeft - 1) * 1000);
+  };
+  tick();
+}
+
 async function capturePhoto() {
-  if (shutter.disabled || !stream) return;
+  if (shutter.disabled || capturePhase !== 'live' || !stream) return;
   capturePhase = 'capturing';
   setBusy(busy);
   const version = ++captureVersion;
@@ -296,7 +347,13 @@ backButton.addEventListener('click', () => { void returnToCamera(); });
 downloadButton.addEventListener('click', downloadSelectedPhoto);
 deleteButton.addEventListener('click', deleteSelectedPhoto);
 
-shutter.addEventListener('click', () => { void capturePhoto(); });
+shutter.addEventListener('click', startShooting);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') cancelCountdown();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) cancelCountdown();
+});
 photoReview.addEventListener('click', () => { void returnToCamera(); });
 video.addEventListener('loadeddata', () => { setBusy(busy); });
 
