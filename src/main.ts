@@ -361,6 +361,7 @@ async function capturePhoto() {
 async function returnToCamera() {
   if (capturePhase !== 'review') return;
   capturePhase = 'returning';
+  restoreCameraStatus();
   setBusy(busy);
   clearTimeout(reviewTimer);
   const destination = pendingPhotoId === selectedPhotoId
@@ -608,7 +609,7 @@ function constraints(value: string, strict = false): MediaTrackConstraints {
 
 function updateSettings() {
   if (!stream) return;
-  if (capturePhase === 'review' || capturePhase === 'returning') return;
+  if (capturePhase === 'review') return;
   const settings = stream.getVideoTracks()[0].getSettings();
   const width = video.videoWidth || settings.width;
   const height = video.videoHeight || settings.height;
