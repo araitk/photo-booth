@@ -20,6 +20,7 @@
             <label for="resolution">解像度</label>
             <div class="select-wrap"><select id="resolution" disabled><option value="auto">自動</option><option value="720">HD · 720p</option><option value="1080" selected>Full HD · 1080p</option><option value="2160">4K · 2160p</option></select><span aria-hidden="true">⌄</span></div>
           </div>
+          <button class="shortcut-help-button" id="show-shortcuts" type="button" aria-label="ショートカット一覧" aria-keyshortcuts="Shift+/" title="ショートカット一覧 (?)">?</button>
         </div>
       </header>
       <p class="status-message" id="status" role="status" aria-live="polite"></p>
@@ -29,7 +30,7 @@
           <div class="viewfinder" id="viewfinder">
             <div class="media-surface" id="media-surface">
               <video id="camera" autoplay muted playsinline aria-label="左右反転したカメラプレビュー"></video>
-              <button class="photo-review" id="photo-review" type="button" aria-label="カメラに戻る" hidden><img id="captured-photo" alt="撮影した写真"></button>
+              <button class="photo-review" id="photo-review" type="button" aria-label="カメラに戻る" aria-keyshortcuts="Escape ArrowLeft ArrowRight" hidden><img id="captured-photo" alt="撮影した写真"></button>
           <div class="grid" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
             </div>
             <div class="countdown" id="countdown" role="status" aria-live="assertive" aria-atomic="true" hidden></div>
@@ -42,13 +43,13 @@
             <p id="camera-message">カメラの使用を許可すると映像が表示されます。</p>
             <button class="start-button" id="start-camera" type="button">カメラを開始</button>
           </div>
-            <button class="fullscreen-button" id="fullscreen" type="button" aria-label="フルスクリーン" aria-pressed="false" title="フルスクリーン"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            <button class="fullscreen-button" id="fullscreen" type="button" aria-label="フルスクリーン" aria-pressed="false" aria-keyshortcuts="F" title="フルスクリーン (F)"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
             <div class="preview-controls" hidden>
               <div class="shooting-controls">
                 <div></div>
-                <button class="shutter" id="shutter" type="button" disabled aria-label="撮影" title="撮影"><span></span></button>
+                <button class="shutter" id="shutter" type="button" disabled aria-label="撮影" aria-keyshortcuts="Space" title="撮影 (Space)"><span></span></button>
                 <div class="photo-actions" id="photo-actions" hidden>
-                  <button id="download-photo" type="button" aria-label="PNGをダウンロード" title="PNGをダウンロード"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg></button>
+                  <button id="download-photo" type="button" aria-label="PNGをダウンロード" aria-keyshortcuts="S" title="PNGをダウンロード (S)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 3v12m-5-5 5 5 5-5M4 16v5h16v-5"/></svg></button>
                   <button id="delete-photo" type="button" aria-label="写真を削除" title="写真を削除"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7"/></svg></button>
                 </div>
               </div>
@@ -64,6 +65,20 @@
         </div>
       </section>
     </main>
+    <dialog class="shortcut-help" id="shortcut-help" aria-labelledby="shortcut-help-title">
+      <div class="shortcut-help-heading"><h2 id="shortcut-help-title">ショートカット</h2><button id="close-shortcuts" type="button" aria-label="閉じる" autofocus>×</button></div>
+      <dl>
+        <div><dt><kbd>Space</kbd></dt><dd>撮影／プレビューを閉じる／タイマー撮影をキャンセル</dd></div>
+        <div><dt><kbd>Esc</kbd></dt><dd>プレビューを閉じる／タイマー撮影をキャンセル</dd></div>
+        <div><dt><kbd>←</kbd> <kbd>→</kbd></dt><dd>プレビュー中は隣の写真へ切り替え。カメラ中は←で最新、→で最古の写真を表示</dd></div>
+        <div><dt><kbd>S</kbd></dt><dd>選択中の写真をPNGで保存</dd></div>
+        <div><dt><kbd>Delete</kbd></dt><dd>選択中の写真を削除</dd></div>
+        <div><dt><kbd>F</kbd></dt><dd>フルスクリーンを切り替え</dd></div>
+        <div><dt><kbd>Enter</kbd></dt><dd>カメラを開始</dd></div>
+        <div><dt><kbd>?</kbd></dt><dd>この一覧を表示／閉じる</dd></div>
+      </dl>
+      <p>全画面中のEscは全画面を終了します。MacではDeleteキー単独で写真を削除できます。</p>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

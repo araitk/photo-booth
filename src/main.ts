@@ -27,6 +27,9 @@ const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
 const previewControls = document.querySelector<HTMLDivElement>('.preview-controls')!;
 const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
 const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
+const shortcutHelp = document.querySelector<HTMLDialogElement>('#shortcut-help')!;
+const shortcutHelpButton = document.querySelector<HTMLButtonElement>('#show-shortcuts')!;
+const closeShortcutHelp = document.querySelector<HTMLButtonElement>('#close-shortcuts')!;
 const photos = new PhotoStore();
 const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
@@ -67,7 +70,7 @@ function setBusy(value: boolean) {
   const counting = capturePhase === 'countdown';
   shutter.classList.toggle('is-counting', counting);
   shutter.setAttribute('aria-label', counting ? '撮影をキャンセル' : '撮影');
-  shutter.title = counting ? '撮影をキャンセル' : '撮影';
+  shutter.title = counting ? '撮影をキャンセル (Space / Esc)' : '撮影 (Space)';
   const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
@@ -402,24 +405,111 @@ function downloadSelectedPhoto() {
   downloads.set(url, { photoId: photo.id, timer: setTimeout(() => releaseDownload(url), 60000) });
 }
 
-function deleteSelectedPhoto() {
+async function deleteSelectedPhoto() {
   if (selectedPhotoId === null || deleteButton.disabled) return;
   const id = selectedPhotoId;
-  clearPhoto();
+  const list = photos.list();
+  const index = list.findIndex(photo => photo.id === id);
+  const next = list[index - 1] || list[index + 1];
   photos.remove(id);
   for (const [url, download] of downloads) {
     if (download.photoId === id) releaseDownload(url);
   }
   renderGallery();
-  restoreCameraStatus();
+  if (next) {
+    const shown = await showPhoto(next);
+    if (!shown && selectedPhotoId === id) {
+      clearPhoto();
+      restoreCameraStatus();
+    }
+  } else {
+    clearPhoto();
+    restoreCameraStatus();
+  }
 }
 
 downloadButton.addEventListener('click', downloadSelectedPhoto);
 deleteButton.addEventListener('click', deleteSelectedPhoto);
 
 shutter.addEventListener('click', startShooting);
+shortcutHelpButton.addEventListener('click', () => { if (!shortcutHelp.open) shortcutHelp.showModal(); });
+closeShortcutHelp.addEventListener('click', () => { shortcutHelp.close(); });
 document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') cancelCountdown();
+  const arrowKey = event.key === 'ArrowLeft' || event.key === 'ArrowRight';
+  if ((event.repeat && !arrowKey) || event.isComposing || event.ctrlKey || event.metaKey || event.altKey) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="textbox"]')) return;
+  if (shortcutHelp.open) {
+    if (event.key === 'Escape' || event.key === '?') {
+      event.preventDefault();
+      shortcutHelp.close();
+    }
+    return;
+  }
+  if (event.key === '?') {
+    event.preventDefault();
+    shortcutHelp.showModal();
+    return;
+  }
+  if (event.key === 'Enter') {
+    if (!target?.closest?.('button, a') && !stream && !busy) {
+      event.preventDefault();
+      void openCamera();
+    }
+    return;
+  }
+  if (event.key === 'Escape') {
+    if (capturePhase === 'countdown') {
+      event.preventDefault();
+      cancelCountdown();
+    } else if (capturePhase === 'review' && !document.fullscreenElement) {
+      event.preventDefault();
+      void returnToCamera();
+    }
+    return;
+  }
+  if (event.key === ' ') {
+    if (!busy && capturePhase === 'review') {
+      event.preventDefault();
+      void returnToCamera();
+      return;
+    }
+    if (target?.closest?.('button, a')) return;
+    if (!shutter.disabled) {
+      event.preventDefault();
+      startShooting();
+    }
+    return;
+  }
+  if (event.key.toLowerCase() === 'f' && !fullscreenButton.disabled) {
+    event.preventDefault();
+    void toggleFullscreen();
+    return;
+  }
+  if (busy) return;
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const list = photos.list();
+    let next: Photo | undefined;
+    if (capturePhase === 'review' && selectedPhotoId !== null) {
+      const index = list.findIndex(photo => photo.id === selectedPhotoId);
+      next = list[index + (event.key === 'ArrowLeft' ? 1 : -1)];
+    } else if (stream && (capturePhase === 'live' || capturePhase === 'returning')) {
+      next = event.key === 'ArrowLeft' ? list[0] : list.at(-1);
+    } else {
+      return;
+    }
+    event.preventDefault();
+    if (next) void showPhoto(next);
+    return;
+  }
+  if (capturePhase !== 'review' || selectedPhotoId === null) return;
+  if (event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    downloadSelectedPhoto();
+  } else if (event.key === 'Delete' || event.key === 'Backspace') {
+    event.preventDefault();
+    deleteSelectedPhoto();
+  }
 });
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) cancelCountdown();
@@ -603,13 +693,13 @@ function updateFullscreen() {
   const label = active ? 'フルスクリーンを終了' : 'フルスクリーン';
   fullscreenButton.setAttribute('aria-label', label);
   fullscreenButton.setAttribute('aria-pressed', String(active));
-  fullscreenButton.title = label;
+  fullscreenButton.title = `${label} (F)`;
   fitPreview();
 }
 
 fullscreenButton.disabled = !document.fullscreenEnabled || !viewfinder.requestFullscreen;
 if (fullscreenButton.disabled) fullscreenButton.title = 'このブラウザではフルスクリーンを利用できません';
-fullscreenButton.addEventListener('click', async () => {
+async function toggleFullscreen() {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
     else await viewfinder.requestFullscreen();
@@ -617,5 +707,6 @@ fullscreenButton.addEventListener('click', async () => {
     status.textContent = 'フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。';
   }
   updateFullscreen();
-});
+}
+fullscreenButton.addEventListener('click', () => { void toggleFullscreen(); });
 document.addEventListener('fullscreenchange', updateFullscreen);

@@ -23,6 +23,8 @@ function setup({ deferPng = false } = {}) {
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       remove() {},
+      showModal() { this.open = true; },
+      close() { this.open = false; },
       querySelectorAll() { return this.children; },
       querySelector() { return null; },
       getBoundingClientRect: () => ({ left: 100, top: 600, width: 96, height: 54 }),
@@ -205,7 +207,7 @@ test('countdown captures once at the deadline, supports cancellation, and resets
   }
   for (const cancel of [
     () => run('startShooting()'),
-    () => document.listeners.get('keydown')({ key: 'Escape' }),
+    () => document.listeners.get('keydown')({ key: 'Escape', preventDefault() {} }),
     () => { document.hidden = true; document.listeners.get('visibilitychange')(); },
     () => run('resetCamera()'),
   ]) {
@@ -224,6 +226,135 @@ test('countdown captures once at the deadline, supports cancellation, and resets
   run('startShooting()');
   assert.equal(run('captures'), 1);
   assert.equal(countdown.hidden, true);
+});
+
+test('keyboard shortcuts dispatch the intended actions and ignore repeats, modifiers, and form controls', () => {
+  const { run, document, elements } = setup();
+  run(`var shots = 0, saves = 0, fullscreens = 0, closes = 0, navigated = [];
+    startShooting = () => shots++;
+    downloadSelectedPhoto = () => saves++;
+    toggleFullscreen = async () => fullscreens++;
+    returnToCamera = async () => closes++;
+    showPhoto = async photo => { navigated.push(photo.id); selectedPhotoId = photo.id; };
+    for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
+    capturePhase = 'review'; selectedPhotoId = 2;`);
+  const press = (key, extra = {}) => {
+    let prevented = false;
+    document.listeners.get('keydown')({ key, preventDefault() { prevented = true; }, ...extra });
+    return prevented;
+  };
+  try {
+    elements.get('#fullscreen').disabled = false;
+    elements.get('#shutter').disabled = false;
+    run("capturePhase = 'live';");
+    assert.equal(press(' '), true);
+    assert.equal(run('shots'), 1);
+    run("capturePhase = 'review';");
+    press(' ');
+    assert.equal(run('closes'), 1);
+    assert.equal(run('shots'), 1);
+    assert.equal(press('s'), true);
+    assert.equal(run('saves'), 1);
+    assert.equal(press('F'), true);
+    assert.equal(run('fullscreens'), 1);
+    press('ArrowLeft');
+    assert.equal(run('selectedPhotoId'), 1);
+    press('ArrowLeft');
+    assert.equal(run('navigated.length'), 1);
+    press('ArrowRight');
+    assert.equal(run('selectedPhotoId'), 2);
+    run('selectedPhotoId = 3;');
+    press('ArrowLeft', { repeat: true });
+    assert.equal(run('selectedPhotoId'), 2);
+    press('ArrowLeft', { repeat: true });
+    assert.equal(run('selectedPhotoId'), 1);
+    run('selectedPhotoId = 2;');
+    press('Escape');
+    assert.equal(run('closes'), 2);
+    document.fullscreenElement = {};
+    assert.equal(press('Escape'), false);
+    assert.equal(run('closes'), 2);
+    document.fullscreenElement = null;
+    for (const extra of [{repeat: true}, {isComposing: true}, {ctrlKey: true}, {metaKey: true}, {altKey: true}, {target: {closest: () => ({})}}]) {
+      assert.equal(press(' ', extra), false);
+      assert.equal(press('s', extra), false);
+    }
+    assert.equal(run('shots'), 1);
+    assert.equal(run('saves'), 1);
+    run("capturePhase = 'capturing';");
+    press('s'); press('ArrowLeft');
+    assert.equal(run('saves'), 1);
+    assert.equal(run('selectedPhotoId'), 2);
+    run("capturePhase = 'live'; selectedPhotoId = null; stream = {};");
+    press('ArrowLeft');
+    assert.equal(run('selectedPhotoId'), 3);
+    run("capturePhase = 'live'; selectedPhotoId = null;");
+    press('ArrowRight');
+    assert.equal(run('selectedPhotoId'), 1);
+    run('selectedPhotoId = null; photos.clear();');
+    press('ArrowLeft'); press('ArrowRight');
+    assert.equal(run('selectedPhotoId'), null);
+  } finally {
+    run('clearPhoto(); photos.clear();');
+  }
+});
+
+test('Delete, Enter and help shortcuts respect selection, camera state and the help dialog', () => {
+  const { run, document, elements } = setup();
+  run(`var deletions = 0, cameraStarts = 0, shots = 0, previewCloses = 0;
+    deleteSelectedPhoto = () => deletions++;
+    openCamera = async () => cameraStarts++;
+    startShooting = () => shots++;
+    returnToCamera = async () => previewCloses++;`);
+  const press = (key, extra = {}) => document.listeners.get('keydown')({key, preventDefault() {}, ...extra});
+  press('Delete');
+  assert.equal(run('deletions'), 0);
+  press('Enter');
+  assert.equal(run('cameraStarts'), 1);
+  run('busy = true;');
+  press('Enter');
+  run('busy = false; stream = {};');
+  press('Enter');
+  assert.equal(run('cameraStarts'), 1);
+  run("capturePhase = 'review'; selectedPhotoId = 1;");
+  press('Delete');
+  assert.equal(run('deletions'), 1);
+  press('Delete', {repeat: true});
+  press('Backspace');
+  assert.equal(run('deletions'), 2);
+  press('?');
+  assert.equal(elements.get('#shortcut-help').open, true);
+  press('Delete'); press('Enter'); press(' ');
+  assert.equal(run('deletions'), 2);
+  assert.equal(run('shots'), 0);
+  assert.equal(run('cameraStarts'), 1);
+  press('Escape');
+  assert.equal(elements.get('#shortcut-help').open, false);
+  assert.equal(run('previewCloses'), 0);
+  press('?'); press('?');
+  assert.equal(elements.get('#shortcut-help').open, false);
+});
+
+test('deletion selects the newer neighbor, falls back to the older neighbor, and returns to the camera for the last photo', async () => {
+  const { run, elements, activeUrls } = setup();
+  try {
+    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(2))');
+    await run('deleteSelectedPhoto()');
+    assert.equal(run('selectedPhotoId'), 3);
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(run('photos.get(2)'), undefined);
+    await run('deleteSelectedPhoto()');
+    assert.equal(run('selectedPhotoId'), 1);
+    await run('deleteSelectedPhoto()');
+    assert.equal(run('selectedPhotoId'), null);
+    assert.equal(run('capturePhase'), 'live');
+    assert.equal(elements.get('#photo-review').hidden, true);
+    assert.equal(activeUrls.size, 0);
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
 });
 
 test('100 captures retain only thumbnails URLs and release originals, images, downloads after deletion', async () => {
@@ -250,13 +381,13 @@ test('100 captures retain only thumbnails URLs and release originals, images, do
     }
     for (let remaining = 100; remaining > 0; remaining--) {
       await run('showPhoto(photos.list()[0])');
-      run(`var downloadUrl = URL.createObjectURL(photos.get(selectedPhotoId).original);
+      await run(`var downloadUrl = URL.createObjectURL(photos.get(selectedPhotoId).original);
         downloads.set(downloadUrl, { photoId: selectedPhotoId, timer: setTimeout(() => releaseDownload(downloadUrl), 60000) });
         deleteSelectedPhoto();`);
       assert.equal(run('photos.list().length'), remaining - 1);
       assert.equal(run('thumbnailImages.size'), remaining - 1);
       assert.equal(run('downloads.size'), 0);
-      assert.equal(activeUrls.size, remaining - 1);
+      assert.equal(activeUrls.size, remaining > 1 ? remaining : 0);
     }
     assert.equal(elements.get('#gallery-list').children.length, 0);
     assert.equal(elements.get('#captured-photo').src, undefined);
