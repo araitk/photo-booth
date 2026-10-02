@@ -19,9 +19,18 @@ pnpm dev
 pnpm build
 ```
 
-型チェックと配布用のビルドを実行します。CSSとJavaScriptをすべて含む単一ファイル `dist/photo-booth.html` を生成します。このファイルをブラウザで直接開けます。ルートの `index.html` は開発用なので、直接開く場合は必ずビルド後のファイルを使ってください。
+型チェックと配布用のビルドを実行します。CSSとJavaScriptをすべて含む単一ファイル `dist/index.html` を生成します。このファイルをブラウザで直接開けます。ルートの `index.html` は開発用なので、直接開く場合は必ずビルド後のファイルを使ってください。
 
 ローカルファイルのカメラ利用はブラウザの許可・対応状況によって異なります。利用できない場合はlocalhostから開いてください。
+
+## Cloudflare Pagesで公開
+
+`pnpm build` で公開用の `dist/index.html` を生成します。
+
+- 手動公開：CloudflareのWorkers & PagesからPagesのDirect Uploadを選び、`dist` フォルダをアップロードします。
+- Git連携：ビルドコマンドを `pnpm build`、出力ディレクトリを `dist` に設定します。
+
+無料の `pages.dev` URLを利用できます。公開後もカメラ映像と撮影した写真はブラウザ内で処理され、サーバーには送信しません。
 
 ## 第1段階
 
