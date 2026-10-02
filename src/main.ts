@@ -81,6 +81,21 @@ let pendingPhotoId: number | null = null;
 let reviewTimer: ReturnType<typeof setTimeout> | undefined;
 let animations: Animation[] = [];
 const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
+let unloadWarningActive = false;
+
+function warnBeforeUnload(event: BeforeUnloadEvent) {
+  if (!photos.hasUnsavedPhotos) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+function syncUnloadWarning() {
+  const needed = photos.hasUnsavedPhotos;
+  if (needed === unloadWarningActive) return;
+  if (needed) window.addEventListener('beforeunload', warnBeforeUnload);
+  else window.removeEventListener('beforeunload', warnBeforeUnload);
+  unloadWarningActive = needed;
+}
 
 function releaseReturningPhoto(element: HTMLDivElement) {
   const entry = returningPhotos.get(element);
@@ -137,6 +152,7 @@ function thumbnailImage(photo: Photo) {
 }
 
 function renderGallery() {
+  syncUnloadWarning();
   const allPhotos = photos.list();
   const selectedIndex = allPhotos.findIndex(photo => photo.id === selectedPhotoId);
   photoPosition.hidden = selectedIndex < 0;
@@ -354,6 +370,7 @@ async function capturePhoto() {
     ]);
     if (version !== captureVersion || !stream) return;
     const photo = photos.add(blob, thumbnail, width, height);
+    syncUnloadWarning();
     if (!await showPhoto(photo, true)) {
       photos.remove(photo.id);
       renderGallery();
@@ -454,6 +471,8 @@ function downloadSelectedPhoto() {
   anchor.download = photoFilename(photo);
   document.body.append(anchor);
   anchor.click();
+  photos.markDownloaded(photo.id);
+  syncUnloadWarning();
   anchor.remove();
   downloads.set(url, { photoId: photo.id, timer: setTimeout(() => releaseDownload(url), 60000) });
 }
@@ -854,6 +873,7 @@ window.addEventListener('pagehide', event => {
   resetCamera();
   if (!event.persisted) {
     photos.clear();
+    syncUnloadWarning();
     thumbnailImages.clear();
     for (const url of downloads.keys()) releaseDownload(url);
   }

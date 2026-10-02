@@ -5,6 +5,7 @@ export interface Photo {
   width: number;
   height: number;
   createdAt: Date;
+  downloadStarted?: boolean;
 }
 
 export class PhotoStore {
@@ -25,6 +26,12 @@ export class PhotoStore {
   list(): Photo[] { return [...this.photos.values()].sort((a, b) => b.id - a.id); }
 
   get canUndo(): boolean { return this.deletedPhoto !== null; }
+  get hasUnsavedPhotos(): boolean { return [...this.photos.values()].some(photo => !photo.downloadStarted); }
+
+  markDownloaded(id: number): void {
+    const photo = this.photos.get(id);
+    if (photo) photo.downloadStarted = true;
+  }
 
   removeUndoable(id: number): void {
     const photo = this.photos.get(id);

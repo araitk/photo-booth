@@ -24,6 +24,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
       remove() {},
+      click() {},
       scrollIntoView(options) { this.scrollOptions = options; },
       showModal() { this.open = true; },
       close() { this.open = false; },
@@ -45,6 +46,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
     };
   }
   const document = {
+    body: element(),
     fullscreenEnabled: false, fullscreenElement: null,
     querySelector(selector) {
       if (!elements.has(selector)) elements.set(selector, element());
@@ -60,7 +62,11 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
       getItem(key) { if (storageBlocked) throw new Error('storage blocked'); return storage.get(key) ?? null; },
       setItem(key, value) { if (storageBlocked) throw new Error('storage blocked'); storage.set(key, value); },
     },
-    window: { matchMedia: () => ({ matches: false }), addEventListener() {} },
+    window: {
+      listeners: new Map(), matchMedia: () => ({ matches: false }),
+      addEventListener(name, callback) { this.listeners.set(name, callback); },
+      removeEventListener(name) { this.listeners.delete(name); },
+    },
     ResizeObserver: class { observe() {} },
     URL: {
       createObjectURL(blob) { const url = `blob:${++nextUrl}`; activeUrls.set(url, blob); return url; },
@@ -675,6 +681,40 @@ test('photo position numbers run from oldest to newest and disappear when the pr
     assert.equal(elements.get('#photo-count').textContent, '3');
   } finally {
     run('clearPhoto(); photos.clear();');
+  }
+});
+
+test('leaving warns only for unsaved photos and updates after download, deletion, and undo without clearing cancelled navigation', async () => {
+  const { run, context, activeUrls } = setup();
+  const listeners = context.window.listeners;
+  try {
+    assert.equal(listeners.has('beforeunload'), false);
+    run(`for (let i = 0; i < 2; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
+      renderGallery();`);
+    assert.equal(listeners.has('beforeunload'), true);
+    let prevented = false;
+    const event = { preventDefault() { prevented = true; } };
+    listeners.get('beforeunload')(event);
+    assert.equal(prevented, true);
+    assert.equal(event.returnValue, '');
+    assert.equal(run('photos.list().length'), 2);
+    await run('showPhoto(photos.get(1))');
+    run('downloadSelectedPhoto()');
+    assert.equal(listeners.has('beforeunload'), true); // Photo 2 is still unsaved.
+    await run('showPhoto(photos.get(2))');
+    await run('deleteSelectedPhoto()');
+    assert.equal(listeners.has('beforeunload'), false);
+    await run('undoDelete()');
+    assert.equal(listeners.has('beforeunload'), true);
+    run('downloadSelectedPhoto()');
+    assert.equal(listeners.has('beforeunload'), false);
+    await run('deleteSelectedPhoto()');
+    await run('undoDelete()');
+    assert.equal(listeners.has('beforeunload'), false); // Restoring a downloaded photo keeps its saved state.
+  } finally {
+    run('resetCamera(); photos.clear(); syncUnloadWarning(); for (const url of downloads.keys()) releaseDownload(url);');
+    assert.equal(activeUrls.size, 0);
+    assert.equal(listeners.has('beforeunload'), false);
   }
 });
 
