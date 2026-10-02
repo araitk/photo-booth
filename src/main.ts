@@ -1,5 +1,6 @@
 import { returnKeyframes } from './return-effects';
 import { PhotoStore, photoFilename, type Photo } from './photo-store';
+import { loadSettings, persistSettings } from './settings';
 
 const video = document.querySelector<HTMLVideoElement>('#camera')!;
 const viewfinder = document.querySelector<HTMLDivElement>('#viewfinder')!;
@@ -37,30 +38,14 @@ const photos = new PhotoStore();
 const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-const settingsStorageKey = 'photo-booth.settings.v1';
-let preferredCameraId = '';
-
-function restoreSettings() {
-  try {
-    const settings = JSON.parse(localStorage.getItem(settingsStorageKey) || 'null');
-    if (!settings || typeof settings !== 'object') return;
-    if (['0', '3', '5', '10'].includes(settings.timer)) timer.value = settings.timer;
-    if (['auto', '720', '1080', '2160'].includes(settings.resolution)) resolution.value = settings.resolution;
-    if (typeof settings.cameraId === 'string') preferredCameraId = settings.cameraId;
-  } catch {
-    // Keep the defaults if storage is unavailable or the saved data is invalid.
-  }
-}
+const savedSettings = loadSettings();
+if (savedSettings.timer !== undefined) timer.value = savedSettings.timer;
+if (savedSettings.resolution !== undefined) resolution.value = savedSettings.resolution;
+let preferredCameraId = savedSettings.cameraId ?? '';
 
 function saveSettings() {
-  try {
-    localStorage.setItem(settingsStorageKey, JSON.stringify({ timer: timer.value, resolution: resolution.value, cameraId: preferredCameraId }));
-  } catch {
-    // Camera controls remain usable when the browser blocks storage.
-  }
+  persistSettings({ timer: timer.value, resolution: resolution.value, cameraId: preferredCameraId });
 }
-
-restoreSettings();
 
 let stream: MediaStream | null = null;
 let cameraDeviceCount = 0;
@@ -106,6 +91,11 @@ function releaseReturningPhoto(element: HTMLDivElement) {
   returningPhotos.delete(element);
 }
 
+function isGalleryLocked(): boolean {
+  return busy || capturePhase === 'countdown' || capturePhase === 'capturing'
+    || (pendingPhotoId !== null && capturePhase !== 'returning');
+}
+
 function setBusy(value: boolean) {
   busy = value;
   viewfinder.classList.toggle('is-returning', capturePhase === 'returning');
@@ -128,7 +118,7 @@ function setBusy(value: boolean) {
   downloadButton.hidden = !reviewing;
   deleteButton.hidden = !reviewing;
   undoButton.hidden = !photos.canUndo;
-  const galleryLocked = value || counting || capturePhase === 'capturing' || (pendingPhotoId !== null && capturePhase !== 'returning');
+  const galleryLocked = isGalleryLocked();
   galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = galleryLocked; });
   if (!value && (cameraChangePending !== null || resolutionChangePending)) {
     void Promise.resolve().then(async () => {
@@ -154,12 +144,14 @@ function thumbnailImage(photo: Photo) {
 function updateDownloadBadge(button: HTMLButtonElement, photo: Photo) {
   const downloaded = Boolean(photo.downloadStarted);
   button.dataset.downloaded = String(downloaded);
+  button.setAttribute('aria-label', `写真 ${photo.id} を表示${downloaded ? '（ダウンロード済み）' : ''}`);
+}
+
+function updateThumbnailMetadata(button: HTMLButtonElement, photo: Photo, number: number) {
+  updateDownloadBadge(button, photo);
   const date = photo.createdAt;
   const pad = (value: number) => String(value).padStart(2, '0');
-  const list = photos.list();
-  const number = list.length - list.findIndex(item => item.id === photo.id);
   button.title = `#${number} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-  button.setAttribute('aria-label', `写真 ${photo.id} を表示${downloaded ? '（ダウンロード済み）' : ''}`);
 }
 
 function renderGallery() {
@@ -181,14 +173,16 @@ function renderGallery() {
   galleryEmpty.hidden = list.length > 0;
   galleryList.hidden = list.length === 0;
   let selectedThumbnail: HTMLButtonElement | undefined;
-  for (const photo of list) {
+  const galleryLocked = isGalleryLocked();
+  for (const [index, photo] of allPhotos.entries()) {
+    if (photo.id === pendingPhotoId) continue;
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'thumbnail';
     button.dataset.photoId = String(photo.id);
-    updateDownloadBadge(button, photo);
+    updateThumbnailMetadata(button, photo, allPhotos.length - index);
     button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
-    button.disabled = busy || (pendingPhotoId !== null && capturePhase !== 'returning') || capturePhase === 'countdown' || capturePhase === 'capturing';
+    button.disabled = galleryLocked;
     button.append(thumbnailImage(photo));
     button.addEventListener('click', () => {
       if (photo.id === selectedPhotoId) {

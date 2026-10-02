@@ -74,7 +74,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
     },
     Date, Blob, setTimeout, clearTimeout, DOMException,
   });
-  for (const file of ['photo-store.ts', 'return-effects.ts', 'main.ts']) {
+  for (const file of ['photo-store.ts', 'return-effects.ts', 'settings.ts', 'main.ts']) {
     const source = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8')
       .replace(/^import .*;\n/gm, '').replaceAll('export ', '');
     const compiled = ts.transpileModule(source, {
