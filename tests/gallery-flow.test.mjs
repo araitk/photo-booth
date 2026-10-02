@@ -685,7 +685,7 @@ test('photo position numbers run from oldest to newest and disappear when the pr
 });
 
 test('leaving warns only for unsaved photos and updates after download, deletion, and undo without clearing cancelled navigation', async () => {
-  const { run, context, activeUrls } = setup();
+  const { run, context, activeUrls, elements } = setup();
   const listeners = context.window.listeners;
   try {
     assert.equal(listeners.has('beforeunload'), false);
@@ -699,7 +699,12 @@ test('leaving warns only for unsaved photos and updates after download, deletion
     assert.equal(event.returnValue, '');
     assert.equal(run('photos.list().length'), 2);
     await run('showPhoto(photos.get(1))');
+    const firstThumbnail = elements.get('#gallery-list').children.find(button => button.dataset.photoId === '1');
+    assert.equal(firstThumbnail.dataset.downloaded, 'false');
     run('downloadSelectedPhoto()');
+    assert.equal(firstThumbnail.dataset.downloaded, 'true');
+    assert.equal(firstThumbnail.title, 'ダウンロード済み');
+    assert(firstThumbnail['aria-label'].includes('ダウンロード済み'));
     assert.equal(listeners.has('beforeunload'), true); // Photo 2 is still unsaved.
     await run('showPhoto(photos.get(2))');
     await run('deleteSelectedPhoto()');
@@ -710,6 +715,7 @@ test('leaving warns only for unsaved photos and updates after download, deletion
     assert.equal(listeners.has('beforeunload'), false);
     await run('deleteSelectedPhoto()');
     await run('undoDelete()');
+    assert.equal(elements.get('#gallery-list').children.find(button => button.dataset.photoId === '2').dataset.downloaded, 'true');
     assert.equal(listeners.has('beforeunload'), false); // Restoring a downloaded photo keeps its saved state.
   } finally {
     run('resetCamera(); photos.clear(); syncUnloadWarning(); for (const url of downloads.keys()) releaseDownload(url);');

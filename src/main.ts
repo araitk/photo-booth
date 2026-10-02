@@ -151,6 +151,13 @@ function thumbnailImage(photo: Photo) {
   return image;
 }
 
+function updateDownloadBadge(button: HTMLButtonElement, photo: Photo) {
+  const downloaded = Boolean(photo.downloadStarted);
+  button.dataset.downloaded = String(downloaded);
+  button.title = downloaded ? 'ダウンロード済み' : '';
+  button.setAttribute('aria-label', `写真 ${photo.id} を表示${downloaded ? '（ダウンロード済み）' : ''}`);
+}
+
 function renderGallery() {
   syncUnloadWarning();
   const allPhotos = photos.list();
@@ -175,7 +182,7 @@ function renderGallery() {
     button.type = 'button';
     button.className = 'thumbnail';
     button.dataset.photoId = String(photo.id);
-    button.setAttribute('aria-label', `写真 ${photo.id} を表示`);
+    updateDownloadBadge(button, photo);
     button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
     button.disabled = busy || (pendingPhotoId !== null && capturePhase !== 'returning') || capturePhase === 'countdown' || capturePhase === 'capturing';
     button.append(thumbnailImage(photo));
@@ -472,6 +479,9 @@ function downloadSelectedPhoto() {
   document.body.append(anchor);
   anchor.click();
   photos.markDownloaded(photo.id);
+  galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => {
+    if (button.dataset.photoId === String(photo.id)) updateDownloadBadge(button, photo);
+  });
   syncUnloadWarning();
   anchor.remove();
   downloads.set(url, { photoId: photo.id, timer: setTimeout(() => releaseDownload(url), 60000) });

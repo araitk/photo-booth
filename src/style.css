@@ -105,7 +105,8 @@ h2 span { font-size: 10px; background: #24262a; color: #7e828b; padding: 2px 6px
 .gallery-empty p { font-size: 11px; }
 .gallery-list { display: flex; flex-direction: row-reverse; gap: 8px; height: 73px; margin-top: 8px; padding: 3px 2px 16px; overflow-x: auto; scroll-padding-inline: 4px; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #484c54 transparent; }
 .new-thumbnail-target { position: absolute; right: 2px; bottom: 16px; width: 96px; height: 54px; pointer-events: none; }
-.thumbnail { flex: 0 0 96px; width: 96px; height: 54px; padding: 0; scroll-margin-inline: 2px; border: 1px solid #ffffff25; border-radius: 5px; background: #151619; overflow: hidden; }
+.thumbnail { position: relative; flex: 0 0 96px; width: 96px; height: 54px; padding: 0; scroll-margin-inline: 2px; border: 1px solid #ffffff25; border-radius: 5px; background: #151619; overflow: hidden; }
+.thumbnail[data-downloaded="true"]::after { content: '✓'; position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 14px; height: 14px; box-sizing: border-box; border: 1px solid #ffffff80; border-radius: 50%; background: #000a; color: #fff; font-size: 10px; line-height: 1; pointer-events: none; }
 .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .thumbnail[aria-pressed="true"] { outline: 1px solid #d7d9df; outline-offset: 1px; }
 .thumbnail:disabled { cursor: default; }
