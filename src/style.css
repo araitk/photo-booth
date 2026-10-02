@@ -26,9 +26,11 @@ video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); d
 .is-live video { opacity: 1; }
 .photo-review { position: absolute; z-index: 1; inset: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; background: #101113; transform-origin: center; }
 .photo-review img { display: block; width: 100%; height: 100%; object-fit: contain; }
-.is-review .grid { opacity: 0; }
-.is-review .shutter { visibility: hidden; }
+.returning-photo { pointer-events: none; z-index: 2; }
+.is-review:not(.is-returning) .grid { opacity: 0; }
+.is-review:not(.is-returning) .shutter { visibility: hidden; }
 .is-review .preview-controls { pointer-events: none; }
+.is-returning .shutter { pointer-events: auto; }
 .is-review .photo-actions button, .is-review .gallery { pointer-events: auto; }
 .viewfinder:not(.is-live) .grid { display: none; }
 .capture-flash { position: absolute; z-index: 5; inset: 0; background: #fff; opacity: 0; pointer-events: none; }
@@ -59,7 +61,6 @@ video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); d
 .photo-actions { justify-self: end; display: flex; gap: 6px; }
 .photo-actions button { display: grid; place-items: center; width: 34px; height: 34px; padding: 7px; color: #d1d3d8; background: #17181cbf; border: 1px solid #ffffff20; border-radius: 6px; }
 .photo-actions button:hover { background: #303238; color: #fff; }
-.photo-actions button:disabled { opacity: .4; }
 .photo-actions svg { width: 18px; height: 18px; }
 #delete-photo:hover { color: #efaaaa; }
 .resolution-control { justify-self: start; }

@@ -17,7 +17,7 @@ const shutter = document.querySelector<HTMLButtonElement>('#shutter')!;
 const timer = document.querySelector<HTMLSelectElement>('#timer')!;
 const countdown = document.querySelector<HTMLDivElement>('#countdown')!;
 const photoReview = document.querySelector<HTMLButtonElement>('#photo-review')!;
-const capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!;
+let capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!;
 const flash = document.querySelector<HTMLDivElement>('#capture-flash')!;
 const galleryEmpty = document.querySelector<HTMLDivElement>('.gallery-empty')!;
 const galleryList = document.querySelector<HTMLDivElement>('#gallery-list')!;
@@ -44,16 +44,26 @@ let photoUrl: string | null = null;
 let selectedPhotoId: number | null = null;
 let pendingPhotoId: number | null = null;
 let reviewTimer: ReturnType<typeof setTimeout> | undefined;
-let transitionTimer: ReturnType<typeof setTimeout> | undefined;
 let animations: Animation[] = [];
+const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
+
+function releaseReturningPhoto(element: HTMLDivElement) {
+  const entry = returningPhotos.get(element);
+  if (!entry) return;
+  element.replaceChildren();
+  element.remove();
+  URL.revokeObjectURL(entry.url);
+  returningPhotos.delete(element);
+}
 
 function setBusy(value: boolean) {
   busy = value;
+  viewfinder.classList.toggle('is-returning', capturePhase === 'returning');
   previewControls.hidden = !stream;
   startButton.disabled = value;
   resolution.disabled = value || !stream || capturePhase !== 'live';
   timer.disabled = value || !stream || capturePhase !== 'live';
-  shutter.disabled = value || !stream || (capturePhase !== 'live' && capturePhase !== 'countdown') || video.readyState < 2 || !video.videoWidth;
+  shutter.disabled = value || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
   const counting = capturePhase === 'countdown';
   shutter.classList.toggle('is-counting', counting);
   shutter.setAttribute('aria-label', counting ? '撮影をキャンセル' : '撮影');
@@ -61,7 +71,8 @@ function setBusy(value: boolean) {
   const locked = value || counting || capturePhase === 'capturing' || capturePhase === 'returning';
   downloadButton.disabled = locked;
   deleteButton.disabled = locked;
-  galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = locked || pendingPhotoId !== null; });
+  const galleryLocked = value || counting || capturePhase === 'capturing' || (pendingPhotoId !== null && capturePhase !== 'returning');
+  galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = galleryLocked; });
 }
 
 function thumbnailImage(photo: Photo) {
@@ -94,21 +105,30 @@ function renderGallery() {
     button.dataset.photoId = String(photo.id);
     button.setAttribute('aria-label', `写真 ${photo.id} を表示`);
     button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
-    button.disabled = busy || pendingPhotoId !== null || capturePhase === 'countdown' || capturePhase === 'capturing' || capturePhase === 'returning';
+    button.disabled = busy || (pendingPhotoId !== null && capturePhase !== 'returning') || capturePhase === 'countdown' || capturePhase === 'capturing';
     button.append(thumbnailImage(photo));
-    button.addEventListener('click', () => { void showPhoto(photo); });
+    button.addEventListener('click', () => {
+      if (photo.id === selectedPhotoId) {
+        void returnToCamera();
+      } else {
+        void showPhoto(photo);
+      }
+    });
     galleryList.append(button);
   }
   galleryList.scrollLeft = scroll;
+}
+
+function cancelPhotoAnimations() {
+  animations.forEach(animation => animation.cancel());
+  animations = [];
 }
 
 function clearPhoto(pendingId: number | null = null) {
   cancelCountdown();
   captureVersion++;
   clearTimeout(reviewTimer);
-  clearTimeout(transitionTimer);
-  animations.forEach(animation => animation.cancel());
-  animations = [];
+  cancelPhotoAnimations();
   photoReview.hidden = true;
   capturedPhoto.removeAttribute('src');
   if (photoUrl) URL.revokeObjectURL(photoUrl);
@@ -127,20 +147,35 @@ function clearPhoto(pendingId: number | null = null) {
 
 async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
   if (!photos.get(photo.id)) return false;
-  clearPhoto(automatic ? photo.id : null);
+  const switching = !photoReview.hidden;
+  if (!switching) clearPhoto(automatic ? photo.id : null);
+  clearTimeout(reviewTimer);
   const version = ++captureVersion;
-  selectedPhotoId = photo.id;
-  pendingPhotoId = automatic ? photo.id : null;
   capturePhase = 'capturing';
   setBusy(busy);
+  let nextUrl: string | null = null;
   try {
-    photoUrl = URL.createObjectURL(photo.original);
-    capturedPhoto.src = photoUrl;
+    nextUrl = URL.createObjectURL(photo.original);
+    const nextImage = document.createElement('img');
+    nextImage.id = 'captured-photo';
+    nextImage.alt = '撮影した写真';
+    nextImage.src = nextUrl;
     await Promise.all([
-      capturedPhoto.decode(),
+      nextImage.decode(),
       thumbnailImage(photo).decode().catch(() => {}),
     ]);
     if (version !== captureVersion) return false;
+    cancelPhotoAnimations();
+    const previousImage = capturedPhoto;
+    const previousUrl = photoUrl;
+    photoReview.replaceChildren(nextImage);
+    capturedPhoto = nextImage;
+    photoUrl = nextUrl;
+    nextUrl = null;
+    previousImage.removeAttribute('src');
+    if (previousUrl) URL.revokeObjectURL(previousUrl);
+    selectedPhotoId = photo.id;
+    pendingPhotoId = automatic ? photo.id : null;
     previewRatio = photo.width / photo.height;
     fitPreview();
     photoReview.hidden = false;
@@ -158,12 +193,20 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
     return true;
   } catch {
     if (version === captureVersion) {
-      clearPhoto();
-      setCameraStatus(stream ? 'LIVE' : 'OFF', Boolean(stream));
-      updateSettings();
+      if (switching) {
+        cancelPhotoAnimations();
+        capturePhase = 'review';
+        setBusy(busy);
+      } else {
+        clearPhoto();
+        setCameraStatus(stream ? 'LIVE' : 'OFF', Boolean(stream));
+        updateSettings();
+      }
       status.textContent = '写真を表示できませんでした。';
     }
     return false;
+  } finally {
+    if (nextUrl) URL.revokeObjectURL(nextUrl);
   }
 }
 
@@ -189,12 +232,13 @@ function startShooting() {
     cancelCountdown();
     return;
   }
-  if (shutter.disabled || capturePhase !== 'live' || !stream) return;
+  if (shutter.disabled || (capturePhase !== 'live' && capturePhase !== 'returning') || !stream) return;
   const seconds = Number(timer.value);
   if (![3, 5, 10].includes(seconds)) {
     void capturePhoto();
     return;
   }
+  if (capturePhase === 'returning') clearPhoto();
   capturePhase = 'countdown';
   status.textContent = '';
   setBusy(busy);
@@ -216,7 +260,7 @@ function startShooting() {
 }
 
 async function capturePhoto() {
-  if (shutter.disabled || capturePhase !== 'live' || !stream) return;
+  if (shutter.disabled || (capturePhase !== 'live' && capturePhase !== 'returning') || !stream) return;
   const captureCanvas = document.createElement('canvas');
   capturePhase = 'capturing';
   setBusy(busy);
@@ -277,26 +321,54 @@ async function returnToCamera() {
   const destination = pendingPhotoId === selectedPhotoId
     ? newThumbnailTarget
     : galleryList.querySelector<HTMLButtonElement>(`[data-photo-id="${selectedPhotoId}"]`) || newThumbnailTarget;
+  const destinationRect = destination.getBoundingClientRect();
+  selectedPhotoId = null;
+  photoActions.hidden = true;
+  renderGallery();
+  setBusy(busy);
   const version = captureVersion;
   if (reducedMotion.matches) {
     clearPhoto();
     restoreCameraStatus();
     return;
   }
+  // Keep the departing image independent of the next capture and preview.
+  const returningPhoto = document.createElement('div');
+  returningPhoto.className = 'photo-review returning-photo';
+  returningPhoto.setAttribute('aria-hidden', 'true');
+  // Keep older departures in front of a new full-size departing image.
+  for (const element of returningPhotos.keys()) {
+    element.style.zIndex = String(Number(element.style.zIndex) + 1);
+  }
+  returningPhoto.style.zIndex = '2';
+  capturedPhoto.removeAttribute('id');
+  returningPhoto.append(capturedPhoto);
+  mediaSurface.append(returningPhoto);
+  returningPhotos.set(returningPhoto, { url: photoUrl!, animation: null });
+  photoUrl = null;
+  capturedPhoto = document.createElement('img');
+  capturedPhoto.id = 'captured-photo';
+  capturedPhoto.alt = '撮影した写真';
+  photoReview.replaceChildren(capturedPhoto);
+  photoReview.hidden = true;
   const duration = 1000;
+  let returnTimer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const animation = photoReview.animate(
-      returnKeyframes(photoReview.getBoundingClientRect(), destination.getBoundingClientRect()),
+    const animation = returningPhoto.animate(
+      returnKeyframes(returningPhoto.getBoundingClientRect(), destinationRect),
       { duration, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' },
     );
-    animations.push(animation);
+    returningPhotos.get(returningPhoto)!.animation = animation;
     // Some browser views suspend their animation timeline while still running timers.
     await Promise.race([
       animation.finished,
-      new Promise<void>(resolve => { transitionTimer = setTimeout(resolve, duration + 120); }),
+      new Promise<void>(resolve => { returnTimer = setTimeout(resolve, duration + 120); }),
     ]);
   } catch {
     // Cancelling an animation during camera disconnect is expected.
+  } finally {
+    clearTimeout(returnTimer);
+    releaseReturningPhoto(returningPhoto);
   }
   if (version !== captureVersion) return;
   clearPhoto();
@@ -407,6 +479,10 @@ function updateSettings() {
 
 function resetCamera() {
   requestVersion++;
+  for (const [element, entry] of returningPhotos) {
+    entry.animation?.cancel();
+    releaseReturningPhoto(element);
+  }
   stream?.getTracks().forEach(track => track.stop());
   stream = null;
   clearPhoto();

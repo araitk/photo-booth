@@ -22,6 +22,7 @@ function setup({ deferPng = false } = {}) {
       append(...children) { this.children.push(...children); },
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
+      remove() {},
       querySelectorAll() { return this.children; },
       querySelector() { return null; },
       getBoundingClientRect: () => ({ left: 100, top: 600, width: 96, height: 54 }),
@@ -35,7 +36,7 @@ function setup({ deferPng = false } = {}) {
       },
       animate(_frames, options) {
         assert([180, 1000].includes(options.duration));
-        return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancel() {} };
+        return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
       },
     };
   }
@@ -68,7 +69,7 @@ function setup({ deferPng = false } = {}) {
     vm.runInContext(compiled, context);
   }
   const run = source => vm.runInContext(source, context);
-  return { elements, context, run, finish: () => finishAnimation(), document, activeUrls, encodings, pending };
+  return { elements, context, run, finish: () => finishAnimation(), completion: () => finishAnimation, document, activeUrls, encodings, pending };
 }
 
 test('append each thumbnail and update count only after the return animation finishes', async () => {
@@ -100,6 +101,57 @@ test('append each thumbnail and update count only after the return animation fin
   }
 });
 
+
+test('photo switching retains the current image until decoding succeeds and cleans up failed or cancelled loads', async () => {
+  const { run, elements, activeUrls } = setup();
+  try {
+    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(1))');
+    const firstImage = run('capturedPhoto');
+    const firstUrl = run('photoUrl');
+    run(`var imageLoads = [];
+      var createElement = document.createElement;
+      document.createElement = tag => {
+        const image = createElement(tag);
+        if (tag === 'img') image.decode = function () {
+          if (this.id !== 'captured-photo') return Promise.resolve();
+          return new Promise((resolve, reject) => imageLoads.push({resolve, reject}));
+        };
+        return image;
+      };`);
+    const switching = run('showPhoto(photos.get(2))');
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(run('capturedPhoto'), firstImage);
+    assert.equal(run('selectedPhotoId'), 1);
+    assert.equal(activeUrls.has(firstUrl), true);
+    run('imageLoads.shift().resolve()');
+    assert.equal(await switching, true);
+    assert.notEqual(run('capturedPhoto'), firstImage);
+    assert.equal(run('selectedPhotoId'), 2);
+    assert.equal(activeUrls.has(firstUrl), false);
+    assert.equal(activeUrls.size, 4);
+
+    const secondImage = run('capturedPhoto');
+    const failed = run('showPhoto(photos.get(3))');
+    run('imageLoads.shift().reject(new Error("decode failed"))');
+    assert.equal(await failed, false);
+    assert.equal(run('capturedPhoto'), secondImage);
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(run('selectedPhotoId'), 2);
+    assert.equal(run('capturePhase'), 'review');
+    assert.equal(activeUrls.size, 4);
+
+    const cancelled = run('showPhoto(photos.get(3))');
+    run('resetCamera(); imageLoads.shift().resolve()');
+    assert.equal(await cancelled, false);
+    assert.equal(elements.get('#photo-review').hidden, true);
+    assert.equal(run('selectedPhotoId'), null);
+    assert.equal(activeUrls.size, 3);
+  } finally {
+    run('clearPhoto(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
 
 test('countdown captures once at the deadline, supports cancellation, and resets with the camera', () => {
   const { elements, context, run, document } = setup();
@@ -210,6 +262,103 @@ test('100 captures retain only thumbnails URLs and release originals, images, do
     assert.equal(elements.get('#captured-photo').src, undefined);
   } finally {
     run('clearPhoto(); photos.clear(); for (const url of downloads.keys()) releaseDownload(url);');
+  }
+});
+
+test('shooting during a return animation preserves the new preview when the old animation finishes', async () => {
+  const { run, elements, pending, completion, activeUrls } = setup({ deferPng: true });
+  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+    timer.value = '0'; setBusy(false);`);
+  try {
+    const first = run('capturePhoto()');
+    pending[0].callback(new Blob(['first'], { type: 'image/png' }));
+    await first;
+    const returning = run('returnToCamera()');
+    const finishOldAnimation = completion();
+    const departingAnimation = run('[...returningPhotos.values()][0].animation');
+    // Save the old completion callback before the next capture creates a flash.
+    run('var originalCapture = capturePhoto; var nextCapture; capturePhoto = () => nextCapture = originalCapture();');
+    assert.equal(elements.get('#shutter').disabled, false);
+    run('startShooting()');
+    assert.equal(pending.length, 2);
+    pending[1].callback(new Blob(['second'], { type: 'image/png' }));
+    await run('nextCapture');
+    assert.equal(departingAnimation.cancelled, false);
+    assert.equal(run('returningPhotos.size'), 1);
+    assert.equal(activeUrls.size, 4); // Two thumbnails, the departing image, and the new preview.
+    finishOldAnimation();
+    await returning;
+    assert.equal(run('returningPhotos.size'), 0);
+    assert.equal(activeUrls.size, 3);
+    assert.equal(run('selectedPhotoId'), 2);
+    assert.equal(run('capturePhase'), 'review');
+    assert.equal(elements.get('#photo-review').hidden, false);
+    assert.equal(run('photos.list().length'), 2);
+    assert.equal(elements.get('#gallery-list').children.length, 1);
+  } finally {
+    run('clearPhoto(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
+test('closing a preview deselects its thumbnail immediately and allows reopening during the return animation', async () => {
+  const { run, elements, completion, activeUrls } = setup();
+  try {
+    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+      photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(1))');
+    const returning = run('returnToCamera()');
+    const finishReturn = completion();
+    assert.equal(run('selectedPhotoId'), null);
+    const thumbnail = elements.get('#gallery-list').children[0];
+    assert.equal(thumbnail['aria-pressed'], 'false');
+    assert.equal(thumbnail.disabled, false);
+    await run('showPhoto(photos.get(1))');
+    assert.equal(run('selectedPhotoId'), 1);
+    assert.equal(run('capturePhase'), 'review');
+    assert.equal(run('returningPhotos.size'), 1);
+    finishReturn();
+    await returning;
+    assert.equal(run('selectedPhotoId'), 1);
+    assert.equal(elements.get('#photo-review').hidden, false);
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
+test('overlapping return animations keep the older image in front and finish independently', async () => {
+  const { run, completion, activeUrls } = setup();
+  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+    timer.value = '0'; setBusy(false);`);
+  try {
+    await run('capturePhoto()');
+    const firstReturn = run('returnToCamera()');
+    const finishFirst = completion();
+    const firstElement = run('[...returningPhotos.keys()][0]');
+    const firstAnimation = run('returningPhotos.get([...returningPhotos.keys()][0]).animation');
+    await run('capturePhoto()');
+    const secondReturn = run('returnToCamera()');
+    const finishSecond = completion();
+    const secondElement = run('[...returningPhotos.keys()][1]');
+    const secondAnimation = run('returningPhotos.get([...returningPhotos.keys()][1]).animation');
+    assert.equal(run('returningPhotos.size'), 2);
+    assert(Number(firstElement.style.zIndex) > Number(secondElement.style.zIndex));
+    assert.equal(firstAnimation.cancelled, false);
+    assert.equal(secondAnimation.cancelled, false);
+    finishFirst();
+    await firstReturn;
+    assert.equal(run('returningPhotos.size'), 1);
+    assert.equal(run('capturePhase'), 'returning');
+    assert.equal(secondAnimation.cancelled, false);
+    finishSecond();
+    await secondReturn;
+    assert.equal(run('returningPhotos.size'), 0);
+    assert.equal(run('capturePhase'), 'live');
+    assert.equal(activeUrls.size, 2);
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
   }
 });
 
