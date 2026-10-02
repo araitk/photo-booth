@@ -38,6 +38,7 @@ const thumbnailImages = new Map<number, HTMLImageElement>();
 const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
 const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 const settingsStorageKey = 'photo-booth.settings.v1';
+let preferredCameraId = '';
 
 function restoreSettings() {
   try {
@@ -45,6 +46,7 @@ function restoreSettings() {
     if (!settings || typeof settings !== 'object') return;
     if (['0', '3', '5', '10'].includes(settings.timer)) timer.value = settings.timer;
     if (['auto', '720', '1080', '2160'].includes(settings.resolution)) resolution.value = settings.resolution;
+    if (typeof settings.cameraId === 'string') preferredCameraId = settings.cameraId;
   } catch {
     // Keep the defaults if storage is unavailable or the saved data is invalid.
   }
@@ -52,7 +54,7 @@ function restoreSettings() {
 
 function saveSettings() {
   try {
-    localStorage.setItem(settingsStorageKey, JSON.stringify({ timer: timer.value, resolution: resolution.value }));
+    localStorage.setItem(settingsStorageKey, JSON.stringify({ timer: timer.value, resolution: resolution.value, cameraId: preferredCameraId }));
   } catch {
     // Camera controls remain usable when the browser blocks storage.
   }
@@ -661,7 +663,7 @@ async function updateCameraList() {
   try {
     const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'videoinput' && device.deviceId);
     if (version !== deviceListVersion) return;
-    const selected = stream?.getVideoTracks()[0]?.getSettings().deviceId || cameraSelect.value;
+    const selected = stream?.getVideoTracks()[0]?.getSettings().deviceId || preferredCameraId || cameraSelect.value;
     cameraSelect.replaceChildren();
     const automatic = document.createElement('option');
     automatic.value = '';
@@ -675,6 +677,11 @@ async function updateCameraList() {
     });
     cameraDeviceCount = devices.length;
     cameraSelect.value = devices.some(device => device.deviceId === selected) ? selected : '';
+    // Before permission, a browser may hide cameras; retain the preference until it can be checked.
+    if (preferredCameraId && !devices.some(device => device.deviceId === preferredCameraId) && (stream || devices.some(device => device.label))) {
+      preferredCameraId = '';
+      saveSettings();
+    }
     setBusy(busy);
   } catch {
     // Device enumeration is optional; the default camera can still be used.
@@ -684,7 +691,7 @@ async function updateCameraList() {
 async function openCamera(deviceId?: string) {
   if (busy || (stream && deviceId === undefined)) return;
   const previousStream = stream;
-  const requestedDevice = deviceId ?? cameraSelect.value;
+  const requestedDevice = deviceId ?? (preferredCameraId || cameraSelect.value);
   const version = ++requestVersion;
   let nextStream: MediaStream | null = null;
   setBusy(true);
@@ -695,10 +702,19 @@ async function openCamera(deviceId?: string) {
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new Error('unsupported');
     }
-    nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
-      ...constraints(resolution.value),
-      ...(requestedDevice ? { deviceId: { exact: requestedDevice } } : {}),
-    } });
+    try {
+      nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
+        ...constraints(resolution.value),
+        ...(requestedDevice ? { deviceId: { exact: requestedDevice } } : {}),
+      } });
+    } catch (error) {
+      if (version !== requestVersion) return;
+      if (previousStream || !requestedDevice || !(error instanceof DOMException) || !['NotFoundError', 'OverconstrainedError'].includes(error.name)) throw error;
+      preferredCameraId = '';
+      cameraSelect.value = '';
+      saveSettings();
+      nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints(resolution.value) });
+    }
     if (version !== requestVersion) {
       nextStream.getTracks().forEach(track => track.stop());
       return;
@@ -723,6 +739,7 @@ async function openCamera(deviceId?: string) {
       status.textContent = 'カメラが対応する解像度で開始しました。';
     }
     appliedResolution = resolution.value;
+    preferredCameraId = settings.deviceId || '';
     saveSettings();
     const activeStream = stream;
     stream.getVideoTracks()[0].addEventListener('ended', () => {
@@ -763,6 +780,10 @@ async function openCamera(deviceId?: string) {
 startButton.addEventListener('click', () => { void openCamera(); });
 cameraSelect.addEventListener('change', async () => {
   if (stream) await openCamera(cameraSelect.value);
+  else {
+    preferredCameraId = cameraSelect.value;
+    saveSettings();
+  }
 });
 navigator.mediaDevices?.addEventListener('devicechange', () => { void updateCameraList(); });
 void updateCameraList();

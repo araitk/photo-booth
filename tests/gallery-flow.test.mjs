@@ -81,7 +81,8 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false }
 }
 
 test('camera selection lists video inputs, switches devices, and keeps the original stream on failure', async () => {
-  const { run, context, elements } = setup();
+  const storage = new Map();
+  const { run, context, elements } = setup({storage});
   const tracks = [];
   const requests = [];
   const makeStream = id => {
@@ -118,6 +119,7 @@ test('camera selection lists video inputs, switches devices, and keeps the origi
     assert.equal(requests[1].audio, false);
     assert.equal(tracks[0].stopped, true);
     assert.equal(tracks[1].stopped, false);
+    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'usb');
     const active = run('stream');
     selector.value = 'unavailable';
     await selector.listeners.get('change')();
@@ -125,10 +127,58 @@ test('camera selection lists video inputs, switches devices, and keeps the origi
     assert.equal(selector.value, 'usb');
     assert.equal(tracks[1].stopped, false);
     assert.equal(elements.get('#camera').srcObject, active);
+    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'usb');
     run("capturePhase = 'review'; setBusy(false);");
     assert.equal(selector.disabled, true);
   } finally {
     run('resetCamera();');
+  }
+});
+
+test('saved camera selection is restored, survives hidden devices before permission, and resets when unavailable', async () => {
+  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '0', resolution: '1080', cameraId: 'usb'})]]);
+  const { run, context, elements } = setup({storage});
+  context.navigator.mediaDevices = { enumerateDevices: async () => [] };
+  await run('updateCameraList()');
+  assert.equal(run('preferredCameraId'), 'usb');
+  context.navigator.mediaDevices.enumerateDevices = async () => [{kind: 'videoinput', deviceId: 'usb', label: 'USBカメラ'}];
+  await run('updateCameraList()');
+  assert.equal(elements.get('#camera-select').value, 'usb');
+  elements.get('#camera-select').value = '';
+  await elements.get('#camera-select').listeners.get('change')();
+  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, '');
+  elements.get('#camera-select').value = 'usb';
+  await elements.get('#camera-select').listeners.get('change')();
+  const reloaded = setup({storage});
+  assert.equal(reloaded.run('preferredCameraId'), 'usb');
+  reloaded.context.navigator.mediaDevices = { enumerateDevices: async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'}] };
+  await reloaded.run('updateCameraList()');
+  assert.equal(reloaded.elements.get('#camera-select').value, '');
+  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, '');
+});
+
+test('starting with a missing saved camera falls back to automatic and remembers the camera actually used', async () => {
+  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '0', resolution: '1080', cameraId: 'missing'})]]);
+  const { run, context, elements } = setup({storage});
+  const requests = [];
+  const track = { stop() {}, addEventListener() {}, getSettings: () => ({deviceId: 'built-in', width: 1920, height: 1080}) };
+  context.navigator.mediaDevices = {
+    getUserMedia: async options => {
+      requests.push(options);
+      if (options.video.deviceId) throw new DOMException('camera removed', 'NotFoundError');
+      return {getTracks: () => [track], getVideoTracks: () => [track]};
+    },
+    enumerateDevices: async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'}],
+  };
+  elements.get('#camera').play = async () => {};
+  try {
+    await run('openCamera()');
+    assert.equal(requests[0].video.deviceId.exact, 'missing');
+    assert.equal(requests[1].video.deviceId, undefined);
+    assert.equal(elements.get('#camera-select').value, 'built-in');
+    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'built-in');
+  } finally {
+    run('resetCamera()');
   }
 });
 
