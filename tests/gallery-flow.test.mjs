@@ -20,6 +20,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false, 
       listeners: new Map(),
       addEventListener(name, callback) { this.listeners.set(name, callback); },
       replaceChildren(...children) { this.children = children; },
+      cloneNode() { return Object.assign(element(), { src: this.src, alt: this.alt, id: this.id }); },
       append(...children) { this.children.push(...children); },
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
@@ -40,7 +41,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false, 
         callback(result);
       },
       animate(_frames, options) {
-        assert([180, 1000].includes(options.duration));
+        assert([180, 1000, 2000].includes(options.duration));
         return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
       },
     };
@@ -143,8 +144,8 @@ test('camera selection lists video inputs, switches devices, and keeps the origi
   }
 });
 
-test('camera changes during capture are deferred, use the latest choice, and preserve the captured preview', async () => {
-  const { run, context, elements, pending } = setup({deferPng: true});
+test('camera changes during capture are deferred until the gallery animation finishes and use the latest choice', async () => {
+  const { run, context, elements, pending, finish } = setup({deferPng: true});
   const requests = [];
   const tracks = [];
   context.navigator.mediaDevices = {
@@ -171,14 +172,16 @@ test('camera changes during capture are deferred, use the latest choice, and pre
     assert.deepEqual(requests, ['built-in']);
     pending[0].callback(new Blob(['png'], {type: 'image/png'}));
     await capturing;
-    const image = run('capturedPhoto');
-    for (let i = 0; i < 8; i++) await run('Promise.resolve()');
+    assert.equal(run('capturePhase'), 'returning');
+    assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
+    assert.deepEqual(requests, ['built-in']);
+    finish();
+    for (let i = 0; i < 12; i++) await run('Promise.resolve()');
     assert.deepEqual(requests, ['built-in', 'external']);
     assert.equal(selector.value, 'external');
-    assert.equal(run('capturedPhoto'), image);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(run('capturePhase'), 'review');
-    assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
+    assert.equal(elements.get('#photo-review').hidden, true);
+    assert.equal(run('capturePhase'), 'live');
+    assert.equal(elements.get('#live-badge').children[1], ' LIVE');
   } finally {
     run('resetCamera(); photos.clear();');
   }
@@ -403,11 +406,23 @@ test('append each thumbnail after the return animation finishes while keeping th
       assert.equal(preparedImage.decoded, true);
       assert.equal(elements.get('#photo-count').textContent, String(count));
       assert.equal(elements.get('#gallery-list').children.length, count - 1);
-      const returning = run('returnToCamera()');
+      assert.equal(run('capturePhase'), 'returning');
+      assert.equal(run('captureReturnInProgress'), true);
+      assert.equal(elements.get('#photo-review').hidden, false);
+      const preview = run('capturedPhoto');
+      const departingImage = run('[...returningPhotos.keys()][0].children[0]');
+      assert.notEqual(preview, departingImage);
+      assert.equal(preview.src, departingImage.src);
+      assert.equal(elements.get('#shutter').disabled, true);
+      assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
       assert.equal(elements.get('#photo-count').textContent, String(count));
       assert.equal(elements.get('#gallery-list').children.length, count - 1);
       finish();
-      await returning;
+      for (let i = 0; i < 4; i++) await run('Promise.resolve()');
+      assert.equal(run('capturePhase'), 'live');
+      assert.equal(run('captureReturnInProgress'), false);
+      assert.equal(elements.get('#photo-review').hidden, true);
+      assert.equal(preview.src, undefined);
       assert.equal(elements.get('#photo-count').textContent, String(count));
       assert.equal(elements.get('#gallery-list').children.length, count);
       assert.equal(elements.get('#gallery-list').children[0].dataset.photoId, String(count));
@@ -422,6 +437,41 @@ test('append each thumbnail after the return animation finishes while keeping th
   }
 });
 
+
+test('Space returns to the camera during capture animation without stopping it or taking another photo', async () => {
+  const { run, elements, document, finish, activeUrls } = setup();
+  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({width: 1920, height: 1080, frameRate: 30})}]};
+    var shots = 0; startShooting = () => shots++;
+    photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+  try {
+    await run('showPhoto(photos.get(1), true)');
+    const animation = run('[...returningPhotos.values()][0].animation');
+    let prevented = false;
+    const pressSpace = () => document.listeners.get('keydown')({key: ' ', target: null, preventDefault() { prevented = true; }});
+    pressSpace();
+    assert.equal(prevented, true);
+    assert.equal(run('shots'), 0);
+    assert.equal(run('captureReturnInProgress'), false);
+    assert.equal(elements.get('#photo-review').hidden, true);
+    assert.equal(elements.get('#shutter').disabled, false);
+    assert.equal(elements.get('#live-badge').children[1], ' LIVE');
+    assert.equal(elements.get('#actual-settings').textContent, '1920 × 1080 / 30 fps');
+    assert.equal(animation.cancelled, false);
+    assert.equal(run('returningPhotos.size'), 1);
+    assert.equal(activeUrls.size, 2);
+    assert.equal(elements.get('#gallery-list').children.length, 0);
+    pressSpace();
+    assert.equal(run('shots'), 1);
+    finish();
+    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
+    assert.equal(run('capturePhase'), 'live');
+    assert.equal(run('returningPhotos.size'), 0);
+    assert.equal(elements.get('#gallery-list').children.length, 1);
+    assert.equal(activeUrls.size, 1);
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
+});
 
 test('photo switching retains the current image until decoding succeeds and cleans up failed or cancelled loads', async () => {
   const { run, elements, activeUrls } = setup();
@@ -815,7 +865,7 @@ test('100 captures retain only thumbnails URLs and release originals, images, do
     for (let count = 1; count <= 100; count++) {
       await run('capturePhoto()');
       assert.equal(run('photos.list().length'), count);
-      assert.equal(activeUrls.size, count + 1); // Thumbnails plus the selected original.
+      assert.equal(activeUrls.size, count); // Reduced motion returns immediately and retains only thumbnails.
       assert.equal(run('photos.list()[0].width'), 1920);
       assert.equal(run('photos.list()[0].height'), 1080);
       await run('returnToCamera()');
@@ -850,9 +900,7 @@ test('shooting during a return animation preserves the new preview when the old 
   run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
     timer.value = '0'; setBusy(false);`);
   try {
-    const first = run('capturePhoto()');
-    pending[0].callback(new Blob(['first'], { type: 'image/png' }));
-    await first;
+    await run('showPhoto(photos.add(new Blob(["first"]), new Blob(["jpg"]), 1920, 1080))');
     const returning = run('returnToCamera()');
     const finishOldAnimation = completion();
     const departingAnimation = run('[...returningPhotos.values()][0].animation');
@@ -860,23 +908,28 @@ test('shooting during a return animation preserves the new preview when the old 
     run('var originalCapture = capturePhoto; var nextCapture; capturePhoto = () => nextCapture = originalCapture();');
     assert.equal(elements.get('#shutter').disabled, false);
     run('startShooting()');
-    assert.equal(pending.length, 2);
-    pending[1].callback(new Blob(['second'], { type: 'image/png' }));
+    assert.equal(pending.length, 1);
+    pending[0].callback(new Blob(['second'], { type: 'image/png' }));
     await run('nextCapture');
     assert.equal(departingAnimation.cancelled, false);
-    assert.equal(run('returningPhotos.size'), 1);
+    assert.equal(run('returningPhotos.size'), 2);
+    const finishNewAnimation = completion();
     assert.equal(activeUrls.size, 4); // Two thumbnails, the departing image, and the new preview.
     finishOldAnimation();
     await returning;
-    assert.equal(run('returningPhotos.size'), 0);
+    assert.equal(run('returningPhotos.size'), 1);
     assert.equal(activeUrls.size, 3);
-    assert.equal(run('selectedPhotoId'), 2);
-    assert.equal(run('capturePhase'), 'review');
+    assert.equal(run('capturePhase'), 'returning');
+    assert.equal(run('captureReturnInProgress'), true);
     assert.equal(elements.get('#photo-review').hidden, false);
     assert.equal(run('photos.list().length'), 2);
     assert.equal(elements.get('#gallery-list').children.length, 1);
+    finishNewAnimation();
+    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
+    assert.equal(run('capturePhase'), 'live');
+    assert.equal(activeUrls.size, 2);
   } finally {
-    run('clearPhoto(); photos.clear();');
+    run('resetCamera(); photos.clear();');
     assert.equal(activeUrls.size, 0);
   }
 });
@@ -912,12 +965,12 @@ test('overlapping return animations keep the older image in front and finish ind
   run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
     timer.value = '0'; setBusy(false);`);
   try {
-    await run('capturePhoto()');
+    await run('showPhoto(photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080))');
     const firstReturn = run('returnToCamera()');
     const finishFirst = completion();
     const firstElement = run('[...returningPhotos.keys()][0]');
     const firstAnimation = run('returningPhotos.get([...returningPhotos.keys()][0]).animation');
-    await run('capturePhoto()');
+    await run('showPhoto(photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080))');
     const secondReturn = run('returnToCamera()');
     const finishSecond = completion();
     const secondElement = run('[...returningPhotos.keys()][1]');
@@ -960,7 +1013,7 @@ test('a capture completing after disconnect does not clear a new capture canvas'
     assert.equal(run('photos.list().length'), 1);
     assert.equal(run('photos.list()[0].original.size'), 3);
   } finally {
-    run('clearPhoto(); photos.clear();');
+    run('resetCamera(); photos.clear();');
     assert.equal(activeUrls.size, 0);
   }
 });

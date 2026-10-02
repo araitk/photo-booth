@@ -69,7 +69,7 @@ let countdownTimer: ReturnType<typeof setTimeout> | undefined;
 let photoUrl: string | null = null;
 let selectedPhotoId: number | null = null;
 let pendingPhotoId: number | null = null;
-let reviewTimer: ReturnType<typeof setTimeout> | undefined;
+let captureReturnInProgress = false;
 let animations: Animation[] = [];
 const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
 let unloadWarningActive = false;
@@ -118,12 +118,13 @@ function isGalleryLocked(): boolean {
 function setBusy(value: boolean) {
   busy = value;
   viewfinder.classList.toggle('is-returning', capturePhase === 'returning');
+  viewfinder.classList.toggle('is-capture-return', captureReturnInProgress);
   previewControls.hidden = !stream;
   startButton.disabled = value;
   resolution.disabled = false;
   cameraSelect.disabled = cameraDeviceCount === 0;
   timer.disabled = false;
-  shutter.disabled = value || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
+  shutter.disabled = value || captureReturnInProgress || !stream || !['live', 'countdown', 'returning'].includes(capturePhase) || video.readyState < 2 || !video.videoWidth;
   const counting = capturePhase === 'countdown';
   shutter.classList.toggle('is-counting', counting);
   shutter.setAttribute('aria-label', counting ? t("撮影をキャンセル") : t("撮影"));
@@ -224,8 +225,8 @@ function cancelPhotoAnimations() {
 
 function clearPhoto(pendingId: number | null = null) {
   cancelCountdown();
+  captureReturnInProgress = false;
   captureVersion++;
-  clearTimeout(reviewTimer);
   cancelPhotoAnimations();
   photoReview.hidden = true;
   capturedPhoto.removeAttribute('src');
@@ -246,7 +247,7 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
   if (!photos.get(photo.id)) return false;
   const switching = !photoReview.hidden;
   if (!switching) clearPhoto(automatic ? photo.id : null);
-  clearTimeout(reviewTimer);
+  captureReturnInProgress = false;
   const version = ++captureVersion;
   capturePhase = 'capturing';
   setBusy(busy);
@@ -285,7 +286,7 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
     renderGallery();
     if (automatic) galleryList.scrollLeft = 0;
     setBusy(busy);
-    if (automatic) reviewTimer = setTimeout(() => { void returnToCamera(); }, 3000);
+    if (automatic) void returnToCamera(true);
     return true;
   } catch {
     if (version === captureVersion) {
@@ -410,12 +411,12 @@ async function capturePhoto() {
   }
 }
 
-async function returnToCamera() {
+async function returnToCamera(afterCapture = false) {
   if (capturePhase !== 'review') return;
   capturePhase = 'returning';
-  restoreCameraStatus();
+  captureReturnInProgress = afterCapture;
+  if (!afterCapture) restoreCameraStatus();
   setBusy(busy);
-  clearTimeout(reviewTimer);
   const destination = pendingPhotoId === selectedPhotoId
     ? newThumbnailTarget
     : galleryList.querySelector<HTMLButtonElement>(`[data-photo-id="${selectedPhotoId}"]`) || newThumbnailTarget;
@@ -438,22 +439,25 @@ async function returnToCamera() {
     element.style.zIndex = String(Number(element.style.zIndex) + 1);
   }
   returningPhoto.style.zIndex = '2';
-  capturedPhoto.removeAttribute('id');
-  returningPhoto.append(capturedPhoto);
+  const departingImage = afterCapture ? capturedPhoto.cloneNode(true) as HTMLImageElement : capturedPhoto;
+  departingImage.removeAttribute('id');
+  returningPhoto.append(departingImage);
   mediaSurface.append(returningPhoto);
   returningPhotos.set(returningPhoto, { url: photoUrl!, animation: null });
   photoUrl = null;
-  capturedPhoto = document.createElement('img');
-  capturedPhoto.id = 'captured-photo';
-  capturedPhoto.alt = t("撮影した写真");
-  photoReview.replaceChildren(capturedPhoto);
-  photoReview.hidden = true;
-  const duration = 1000;
+  if (!afterCapture) {
+    capturedPhoto = document.createElement('img');
+    capturedPhoto.id = 'captured-photo';
+    capturedPhoto.alt = t("撮影した写真");
+    photoReview.replaceChildren(capturedPhoto);
+    photoReview.hidden = true;
+  }
+  const duration = afterCapture ? 2000 : 300;
   let returnTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const animation = returningPhoto.animate(
       returnKeyframes(returningPhoto.getBoundingClientRect(), destinationRect),
-      { duration, easing: 'cubic-bezier(.2,.7,.2,1)', fill: 'forwards' },
+      { duration, easing: 'cubic-bezier(.05,.7,.05,1)', fill: 'forwards' },
     );
     returningPhotos.get(returningPhoto)!.animation = animation;
     // Some browser views suspend their animation timeline while still running timers.
@@ -591,6 +595,15 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key === ' ') {
+    if (captureReturnInProgress) {
+      event.preventDefault();
+      captureReturnInProgress = false;
+      photoReview.hidden = true;
+      capturedPhoto.removeAttribute('src');
+      restoreCameraStatus();
+      setBusy(busy);
+      return;
+    }
     if (!busy && capturePhase === 'review') {
       event.preventDefault();
       void returnToCamera();
@@ -675,7 +688,7 @@ function constraints(value: string, strict = false): MediaTrackConstraints {
 
 function updateSettings() {
   if (!stream) return;
-  if (capturePhase === 'review') return;
+  if (capturePhase === 'review' || captureReturnInProgress) return;
   const settings = stream.getVideoTracks()[0].getSettings();
   const width = video.videoWidth || settings.width;
   const height = video.videoHeight || settings.height;
