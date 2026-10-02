@@ -1,4 +1,3 @@
-import './style.css';
 import { returnKeyframes } from './return-effects';
 import { PhotoStore, photoFilename, type Photo } from './photo-store';
 
