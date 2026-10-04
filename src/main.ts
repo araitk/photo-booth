@@ -68,6 +68,7 @@ let capturePhase: 'live' | 'countdown' | 'capturing' | 'review' | 'returning' = 
 let countdownTimer: ReturnType<typeof setTimeout> | undefined;
 let photoUrl: string | null = null;
 let selectedPhotoId: number | null = null;
+let lastViewedPhotoId: number | null = null;
 let pendingPhotoId: number | null = null;
 let captureReturnInProgress = false;
 let animations: Animation[] = [];
@@ -273,6 +274,7 @@ async function showPhoto(photo: Photo, automatic = false): Promise<boolean> {
     previousImage.removeAttribute('src');
     if (previousUrl) URL.revokeObjectURL(previousUrl);
     selectedPhotoId = photo.id;
+    lastViewedPhotoId = photo.id;
     pendingPhotoId = automatic ? photo.id : null;
     previewRatio = photo.width / photo.height;
     fitPreview();
@@ -595,6 +597,7 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key === ' ') {
+    if (target?.closest?.('button, a')) return;
     if (captureReturnInProgress) {
       event.preventDefault();
       captureReturnInProgress = false;
@@ -609,7 +612,6 @@ document.addEventListener('keydown', event => {
       void returnToCamera();
       return;
     }
-    if (target?.closest?.('button, a')) return;
     if (!shutter.disabled) {
       event.preventDefault();
       startShooting();
@@ -622,6 +624,30 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (busy) return;
+  if (event.key === 'ArrowUp') {
+    if (captureReturnInProgress) {
+      event.preventDefault();
+      captureReturnInProgress = false;
+      photoReview.hidden = true;
+      capturedPhoto.removeAttribute('src');
+      restoreCameraStatus();
+      setBusy(busy);
+    } else if (capturePhase === 'review') {
+      event.preventDefault();
+      void returnToCamera();
+    }
+    return;
+  }
+  if (event.key === 'ArrowDown') {
+    if (capturePhase === 'live' || capturePhase === 'returning') {
+      const photo = (lastViewedPhotoId === null ? undefined : photos.get(lastViewedPhotoId)) ?? photos.list()[0];
+      if (photo) {
+        event.preventDefault();
+        void showPhoto(photo);
+      }
+    }
+    return;
+  }
   if (event.key.toLowerCase() === 'z' && !event.shiftKey && !undoButton.disabled && photos.canUndo) {
     event.preventDefault();
     void undoDelete();

@@ -34,6 +34,8 @@ const english = {
   "全画面表示を切り替え": "Toggle full screen",
   "撮影／タイマーをキャンセル／プレビューを閉じる": "Take photo / Cancel timer / Close preview",
   "プレビュー写真を切り替え": "Switch preview photos",
+  "プレビューを開く": "Open preview",
+  "プレビューを閉じる": "Close preview",
   "選択中の写真を保存": "Save selected photo",
   "選択中の写真を削除": "Delete selected photo",
   "直前に削除した写真を元に戻す": "Restore the last deleted photo",

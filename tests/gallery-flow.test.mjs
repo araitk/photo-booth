@@ -668,6 +668,77 @@ test('keyboard shortcuts dispatch the intended actions and ignore repeats, modif
   }
 });
 
+test('vertical arrows reopen the last viewed photo, fall back to latest, and leave capture and controls alone', async () => {
+  const { run, document, elements, activeUrls } = setup();
+  const press = (key, extra = {}) => {
+    let prevented = false;
+    document.listeners.get('keydown')({ key, preventDefault() { prevented = true; }, ...extra });
+    return prevented;
+  };
+  run('var opening; var originalShow = showPhoto; showPhoto = (...args) => opening = originalShow(...args); reducedMotion.matches = true;');
+  try {
+    assert.equal(press('ArrowDown'), false);
+    run("for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);");
+    assert.equal(press('ArrowDown'), true);
+    await run('opening');
+    assert.equal(run('selectedPhotoId'), 3);
+    assert.equal(press('ArrowUp'), true);
+    assert.equal(run('selectedPhotoId'), null);
+    await run('showPhoto(photos.get(2))');
+    await run('returnToCamera()');
+    assert.equal(run('lastViewedPhotoId'), 2);
+    press('ArrowDown');
+    await run('opening');
+    assert.equal(run('selectedPhotoId'), 2);
+    document.fullscreenElement = {};
+    press('ArrowUp');
+    assert.equal(run('capturePhase'), 'live');
+    document.fullscreenElement = null;
+    run('photos.remove(2);');
+    press('ArrowDown');
+    await run('opening');
+    assert.equal(run('selectedPhotoId'), 3);
+    press('ArrowUp');
+    for (const extra of [{repeat: true}, {isComposing: true}, {ctrlKey: true}, {metaKey: true}, {altKey: true}, {target: {closest: () => ({})}}]) {
+      assert.equal(press('ArrowDown', extra), false);
+    }
+    elements.get('#shortcut-help').open = true;
+    assert.equal(press('ArrowDown'), false);
+    elements.get('#shortcut-help').open = false;
+    for (const phase of ['countdown', 'capturing']) {
+      run(`capturePhase = '${phase}';`);
+      assert.equal(press('ArrowDown'), false);
+      assert.equal(press('ArrowUp'), false);
+      assert.equal(run('capturePhase'), phase);
+    }
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
+test('Space leaves focused buttons and links to native activation during review and capture return', async () => {
+  const { run, document, activeUrls } = setup();
+  try {
+    run("photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);");
+    await run('showPhoto(photos.get(1))');
+    for (const captureReturn of [false, true]) {
+      run(`captureReturnInProgress = ${captureReturn}; capturePhase = '${captureReturn ? 'returning' : 'review'}';`);
+      for (const name of ['download-photo', 'delete-photo', 'photo-review', 'link']) {
+        let prevented = false;
+        const target = { closest: selector => selector === 'button, a' ? { id: name } : null };
+        document.listeners.get('keydown')({ key: ' ', target, preventDefault() { prevented = true; } });
+        assert.equal(prevented, false);
+        assert.equal(run('captureReturnInProgress'), captureReturn);
+        assert.equal(run('selectedPhotoId'), 1);
+      }
+    }
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
+  }
+});
+
 test('Delete, Enter and help shortcuts respect selection, camera state and the help dialog', () => {
   const { run, document, elements } = setup();
   run(`var deletions = 0, cameraStarts = 0, shots = 0, previewCloses = 0;
