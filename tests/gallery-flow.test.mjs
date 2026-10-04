@@ -761,7 +761,8 @@ test('deletion keeps the displayed image, position and gallery stable until its 
   }
 });
 
-test('undo via keyboard restores and selects the deleted photo and scrolls its thumbnail into view', async () => {
+for (const modifiers of [{}, { metaKey: true }, { ctrlKey: true }]) {
+test(`undo via keyboard ${JSON.stringify(modifiers)} restores and selects the deleted photo and scrolls its thumbnail into view`, async () => {
   const { run, elements, document, activeUrls } = setup();
   try {
     run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
@@ -777,9 +778,11 @@ test('undo via keyboard restores and selects the deleted photo and scrolls its t
     assert.equal(elements.get('#undo-delete').hidden, false);
     assert.equal(elements.get('#undo-delete').disabled, false);
     run('var undoAttempt; var originalUndo = undoDelete; undoDelete = () => undoAttempt = originalUndo();');
-    const press = extra => document.listeners.get('keydown')({ key: 'z', metaKey: true, preventDefault() {}, ...extra });
+    const press = extra => document.listeners.get('keydown')({ key: 'z', ...modifiers, preventDefault() {}, ...extra });
     press({repeat: true});
     press({target: {closest: () => ({})}});
+    press({shiftKey: true});
+    press({altKey: true});
     assert.equal(run('undoAttempt'), undefined);
     press({});
     await run('undoAttempt');
@@ -795,6 +798,8 @@ test('undo via keyboard restores and selects the deleted photo and scrolls its t
     assert.equal(activeUrls.size, 0);
   }
 });
+
+}
 
 test('photo position numbers run from oldest to newest and disappear when the preview closes', async () => {
   const { run, elements } = setup();

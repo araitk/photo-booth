@@ -622,6 +622,11 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (busy) return;
+  if (event.key.toLowerCase() === 'z' && !event.shiftKey && !undoButton.disabled && photos.canUndo) {
+    event.preventDefault();
+    void undoDelete();
+    return;
+  }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
     const list = photos.list();
     let next: Photo | undefined;

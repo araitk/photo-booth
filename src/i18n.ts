@@ -25,7 +25,7 @@ const english = {
   "写真を削除": "Delete photo",
   "写真": "Photos",
   "削除した写真を元に戻す": "Restore deleted photo",
-  "削除した写真を元に戻す (⌘Z / Ctrl+Z)": "Restore deleted photo (⌘Z / Ctrl+Z)",
+  "削除した写真を元に戻す (Z)": "Restore deleted photo (Z)",
   "元に戻す": "Undo",
   "まだ写真がありません": "No photos yet",
   "写真一覧": "Photo gallery",
