@@ -20,7 +20,7 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false, 
       listeners: new Map(),
       addEventListener(name, callback) { this.listeners.set(name, callback); },
       replaceChildren(...children) { this.children = children; },
-      cloneNode() { return Object.assign(element(), { src: this.src, alt: this.alt, id: this.id }); },
+      cloneNode() { return Object.assign(element(), { src: this.src, alt: this.alt, id: this.id, children: this.children.map(child => child.cloneNode()) }); },
       append(...children) { this.children.push(...children); },
       setAttribute(name, value) { this[name] = value; },
       removeAttribute(name) { delete this[name]; },
@@ -40,9 +40,12 @@ function setup({ deferPng = false, storage = new Map(), storageBlocked = false, 
         encodings.push({ canvas: this, callback, result });
         callback(result);
       },
-      animate(_frames, options) {
+      animationCalls: [],
+      animate(frames, options) {
         assert([180, 300, 2000].includes(options.duration));
-        return { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
+        const animation = { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
+        this.animationCalls.push({frames, options, animation});
+        return animation;
       },
     };
   }
@@ -437,6 +440,34 @@ test('append each thumbnail after the return animation finishes while keeping th
   }
 });
 
+
+test('gallery reserves room once for a new photo and keeps it through redraws until the photo arrives', async () => {
+  const { run, elements, finish } = setup();
+  try {
+    run(`photos.add(new Blob(['first']), new Blob(['jpg']), 1920, 1080);
+      photos.add(new Blob(['second']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(2), true)');
+    const spacing = run('gallerySpaceAnimation');
+    assert(spacing);
+    assert.equal(spacing.cancelled, false);
+    assert.equal(elements.get('#gallery-list').children.length, 1);
+    run('renderGallery()');
+    assert.equal(run('gallerySpaceAnimation'), spacing);
+    assert.equal(spacing.cancelled, false);
+    finish();
+    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
+    assert.equal(spacing.cancelled, true);
+    assert.equal(run('gallerySpaceAnimation'), null);
+    assert.equal(elements.get('#gallery-list').children.length, 2);
+    assert.equal(elements.get('#gallery-list').children[0].dataset.photoId, '2');
+    run('reducedMotion.matches = true; photos.add(new Blob(["third"]), new Blob(["jpg"]), 1920, 1080);');
+    await run('showPhoto(photos.get(3), true)');
+    assert.equal(run('gallerySpaceAnimation'), null);
+    assert.equal(elements.get('#gallery-list').children.length, 3);
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
+});
 
 test('Space returns to the camera during capture animation without stopping it or taking another photo', async () => {
   const { run, elements, document, finish, activeUrls } = setup();
@@ -968,6 +999,53 @@ test('100 captures retain thumbnails and undo history while releasing preview an
     assert.equal(elements.get('#captured-photo').src, undefined);
   } finally {
     run('clearPhoto(); photos.clear(); for (const url of downloads.keys()) releaseDownload(url);');
+  }
+});
+
+test('deletion and restoration animate for 300ms, preserve thumbnail elements on redraw, and clean up on reset', async () => {
+  const { run, elements, finish } = setup();
+  try {
+    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
+    await run('showPhoto(photos.get(2))');
+    const list = elements.get('#gallery-list');
+    const older = list.children.find(button => button.dataset.photoId === '1');
+    older.getBoundingClientRect = () => ({left: list.children.indexOf(older) * 104, top: 600, width: 96, height: 54});
+    await run('deleteSelectedPhoto()');
+    assert.equal(list.children.find(button => button.dataset.photoId === '1'), older);
+    assert.equal(older.animationCalls.at(-1).options.duration, 300);
+    assert.equal(older.animationCalls.at(-1).frames[0].transform, 'translateX(104px)');
+    const departing = run('[...galleryAnimations.entries()].find(([, element]) => element !== null)[1]');
+    assert.equal(departing['aria-hidden'], 'true');
+    assert.equal(departing.animationCalls[0].options.duration, 300);
+    assert.equal(departing.animationCalls[0].frames[0].transform, 'scaleX(1)');
+    assert.equal(departing.animationCalls[0].frames[1].transform, 'scaleX(0)');
+    assert.equal(departing.animationCalls[0].frames[1].opacity, 0);
+    let removed = false;
+    departing.remove = () => { removed = true; };
+    finish();
+    await run('Promise.resolve()');
+    assert.equal(removed, true);
+    await run('undoDelete()');
+    const restored = list.children.find(button => button.dataset.photoId === '2');
+    const appearance = restored.animationCalls[0];
+    assert.equal(appearance.options.duration, 300);
+    assert.equal(appearance.frames[0].opacity, 0);
+    assert.equal(appearance.frames[1].opacity, 1);
+    assert.equal(older.animationCalls.at(-1).frames[0].transform, 'translateX(-104px)');
+    run('renderGallery()');
+    assert.equal(list.children.find(button => button.dataset.photoId === '2'), restored);
+    assert.equal(restored.animationCalls.length, 1);
+    const active = run('[...galleryAnimations.keys()]');
+    run('resetCamera()');
+    assert.equal(run('galleryAnimations.size'), 0);
+    for (const animation of active) assert.equal(animation.cancelled, true);
+    run('reducedMotion.matches = true;');
+    await run('showPhoto(photos.get(2))');
+    await run('deleteSelectedPhoto()');
+    await run('undoDelete()');
+    assert.equal(run('galleryAnimations.size'), 0);
+  } finally {
+    run('resetCamera(); photos.clear();');
   }
 });
 

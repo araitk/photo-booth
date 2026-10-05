@@ -109,13 +109,16 @@ h2 span:not(.gallery-title) { font-size: 10px; background: #24262a; color: #7e82
 .gallery-empty { margin-top: 8px; height: 73px; display: flex; align-items: center; justify-content: center; gap: 9px; color: #888e99; }
 .gallery-empty svg { width: 21px; height: 21px; }
 .gallery-empty p { font-size: 11px; }
-.gallery-list { display: flex; flex-direction: row-reverse; gap: 8px; height: 73px; margin-top: 8px; padding: 3px 2px 16px; overflow-x: auto; scroll-padding-inline: 4px; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #484c54 transparent; }
+.gallery-list { --thumbnail-width: 96px; --thumbnail-gap: 8px; display: flex; flex-direction: row-reverse; gap: var(--thumbnail-gap); height: 73px; margin-top: 8px; padding: 3px 2px 16px; overflow-x: auto; scroll-padding-inline: 4px; overscroll-behavior-x: contain; scrollbar-width: thin; scrollbar-color: #484c54 transparent; }
+.gallery-list.has-pending-photo { padding-right: calc(var(--thumbnail-width) + var(--thumbnail-gap) + 2px); }
 .new-thumbnail-target { position: absolute; right: 2px; bottom: 16px; width: 96px; height: 54px; pointer-events: none; }
 .thumbnail { position: relative; flex: 0 0 96px; width: 96px; height: 54px; padding: 0; scroll-margin-inline: 2px; border: 1px solid #ffffff25; border-radius: 5px; background: #151619; overflow: hidden; }
 .thumbnail[data-downloaded="true"]::after { content: '✓'; position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 14px; height: 14px; box-sizing: border-box; border: 1px solid #ffffff80; border-radius: 50%; background: #000a; color: #fff; font-size: 10px; line-height: 1; pointer-events: none; }
 .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .thumbnail[aria-pressed="true"] { outline: 1px solid #d7d9df; outline-offset: 1px; }
 .thumbnail:disabled { cursor: default; }
+.gallery-departing { position: absolute; z-index: 1; pointer-events: none; }
+.gallery:has(.gallery-departing) .gallery-empty { visibility: hidden; }
 @media (max-width: 640px) {
   .booth { padding: 0 16px 16px; }
   .header { padding: 16px 0; flex-wrap: wrap; gap: 14px; }
@@ -145,7 +148,7 @@ h2 span:not(.gallery-title) { font-size: 10px; background: #24262a; color: #7e82
   .gallery-empty { height: 49px; margin-top: 4px; }
   .gallery-empty p { font-size: 10px; margin: 0; }
   .gallery-empty svg { width: 16px; height: 16px; }
-  .gallery-list { height: 49px; gap: 6px; margin-top: 4px; padding-bottom: 14px; }
+  .gallery-list { --thumbnail-width: 56px; --thumbnail-gap: 6px; height: 49px; margin-top: 4px; padding-bottom: 14px; }
   .thumbnail { flex-basis: 56px; width: 56px; height: 32px; }
   .new-thumbnail-target { bottom: 14px; width: 56px; height: 32px; }
   .photo-actions { gap: 4px; }

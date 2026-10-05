@@ -30,6 +30,7 @@ let capturedPhoto = document.querySelector<HTMLImageElement>('#captured-photo')!
 const flash = document.querySelector<HTMLDivElement>('#capture-flash')!;
 const galleryEmpty = document.querySelector<HTMLDivElement>('.gallery-empty')!;
 const galleryList = document.querySelector<HTMLDivElement>('#gallery-list')!;
+const gallery = document.querySelector<HTMLElement>('.gallery')!;
 const newThumbnailTarget = document.querySelector<HTMLSpanElement>('#new-thumbnail-target')!;
 const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
 const photoPosition = document.querySelector<HTMLSpanElement>('#photo-position')!;
@@ -73,6 +74,20 @@ let pendingPhotoId: number | null = null;
 let captureReturnInProgress = false;
 let animations: Animation[] = [];
 const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
+let gallerySpaceAnimation: Animation | null = null;
+let gallerySpacePhotoId: number | null = null;
+let galleryChange: { kind: 'delete' | 'restore'; id: number } | null = null;
+const galleryAnimations = new Map<Animation, HTMLElement | null>();
+
+function animateGalleryElement(element: HTMLElement, frames: Keyframe[], departing = false) {
+  const animation = element.animate(frames, { duration: 300, easing: 'cubic-bezier(.2,.7,.2,1)' });
+  galleryAnimations.set(animation, departing ? element : null);
+  const release = () => {
+    if (departing) element.remove();
+    galleryAnimations.delete(animation);
+  };
+  void animation.finished.then(release, release);
+}
 let unloadWarningActive = false;
 let helpOpenedByPointer = false;
 const pointerSelectedControls = new WeakSet<HTMLSelectElement>();
@@ -177,6 +192,13 @@ function updateThumbnailMetadata(button: HTMLButtonElement, photo: Photo, number
 
 function renderGallery() {
   syncUnloadWarning();
+  const previousButtons = new Map(Array.from(galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail'), button => [Number(button.dataset.photoId), button]));
+  const change = galleryChange;
+  galleryChange = null;
+  const previousRects = new Map<number, DOMRect>();
+  if (change && !reducedMotion.matches) {
+    for (const [id, button] of previousButtons) previousRects.set(id, button.getBoundingClientRect());
+  }
   const allPhotos = photos.list();
   const selectedIndex = allPhotos.findIndex(photo => photo.id === selectedPhotoId);
   photoPosition.hidden = selectedIndex < 0;
@@ -190,33 +212,76 @@ function renderGallery() {
   const scroll = galleryList.scrollLeft;
   galleryList.replaceChildren();
   const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
+  const hasPendingPhoto = pendingPhotoId !== null && photos.get(pendingPhotoId) !== undefined;
+  galleryList.classList.toggle('has-pending-photo', hasPendingPhoto);
+  if (gallerySpacePhotoId !== (hasPendingPhoto ? pendingPhotoId : null)) {
+    gallerySpaceAnimation?.cancel();
+    gallerySpaceAnimation = null;
+    gallerySpacePhotoId = hasPendingPhoto ? pendingPhotoId : null;
+    if (hasPendingPhoto && list.length > 0 && !reducedMotion.matches) {
+      gallerySpaceAnimation = galleryList.animate(
+        [{ paddingRight: '2px' }, { paddingRight: 'calc(var(--thumbnail-width) + var(--thumbnail-gap) + 2px)' }],
+        { duration: 300, easing: 'cubic-bezier(.2,.7,.2,1)' },
+      );
+    }
+  }
   photoCount.textContent = String(allPhotos.length);
-  galleryEmpty.hidden = list.length > 0;
-  galleryList.hidden = list.length === 0;
+  galleryEmpty.hidden = list.length > 0 || hasPendingPhoto;
+  galleryList.hidden = list.length === 0 && !hasPendingPhoto;
   let selectedThumbnail: HTMLButtonElement | undefined;
   const galleryLocked = isGalleryLocked();
   for (const [index, photo] of allPhotos.entries()) {
     if (photo.id === pendingPhotoId) continue;
-    const button = document.createElement('button');
+    const existing = previousButtons.get(photo.id);
+    const button = existing ?? document.createElement('button');
     button.type = 'button';
     button.className = 'thumbnail';
     button.dataset.photoId = String(photo.id);
     updateThumbnailMetadata(button, photo, allPhotos.length - index);
     button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
     button.disabled = galleryLocked;
-    button.append(thumbnailImage(photo));
-    button.addEventListener('click', () => {
-      if (photo.id === selectedPhotoId) {
-        void returnToCamera();
-      } else {
-        void showPhoto(photo);
-      }
-    });
+    if (!existing) {
+      button.append(thumbnailImage(photo));
+      button.addEventListener('click', () => {
+        if (photo.id === selectedPhotoId) {
+          void returnToCamera();
+        } else {
+          void showPhoto(photo);
+        }
+      });
+    } else {
+      thumbnailImage(photo);
+    }
     galleryList.append(button);
     if (photo.id === selectedPhotoId) selectedThumbnail = button;
   }
   galleryList.scrollLeft = scroll;
   selectedThumbnail?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  if (change && !reducedMotion.matches) {
+    for (const button of galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail')) {
+      const id = Number(button.dataset.photoId);
+      const previous = previousRects.get(id);
+      if (previous) {
+        const delta = previous.left - button.getBoundingClientRect().left;
+        if (delta) animateGalleryElement(button, [{ transform: `translateX(${delta}px)` }, { transform: 'translateX(0)' }]);
+      } else if (change.kind === 'restore' && id === change.id) {
+        animateGalleryElement(button, [{ opacity: 0, transform: 'scaleX(0)' }, { opacity: 1, transform: 'scaleX(1)' }]);
+      }
+    }
+    const deleted = change.kind === 'delete' ? previousButtons.get(change.id) : undefined;
+    const rect = previousRects.get(change.id);
+    if (deleted && rect) {
+      const departing = deleted.cloneNode(true) as HTMLButtonElement;
+      departing.classList.add('gallery-departing');
+      departing.setAttribute('aria-hidden', 'true');
+      departing.setAttribute('aria-pressed', 'false');
+      departing.tabIndex = -1;
+      const origin = gallery.getBoundingClientRect();
+      Object.assign(departing.style, { left: `${rect.left - origin.left}px`, top: `${rect.top - origin.top}px`, width: `${rect.width}px`, height: `${rect.height}px` });
+      gallery.append(departing);
+      animateGalleryElement(departing, [{ opacity: 1, transform: 'scaleX(1)' }, { opacity: 0, transform: 'scaleX(0)' }], true);
+    }
+  }
 }
 
 function cancelPhotoAnimations() {
@@ -519,6 +584,7 @@ async function deleteSelectedPhoto() {
   const list = photos.list();
   const index = list.findIndex(photo => photo.id === id);
   const next = list[index - 1] || list[index + 1];
+  galleryChange = { kind: 'delete', id };
   photos.removeUndoable(id);
   for (const [url, download] of downloads) {
     if (download.photoId === id) releaseDownload(url);
@@ -541,6 +607,7 @@ async function undoDelete() {
   if (undoButton.disabled) return;
   const photo = photos.undoRemove();
   if (!photo) return;
+  galleryChange = { kind: 'restore', id: photo.id };
   renderGallery();
   await showPhoto(photo);
 }
@@ -738,6 +805,12 @@ function updateSettings() {
 
 function resetCamera() {
   requestVersion++;
+  galleryChange = null;
+  for (const [animation, departing] of galleryAnimations) {
+    animation.cancel();
+    departing?.remove();
+  }
+  galleryAnimations.clear();
   for (const [element, entry] of returningPhotos) {
     entry.animation?.cancel();
     releaseReturningPhoto(element);
