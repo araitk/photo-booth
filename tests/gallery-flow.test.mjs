@@ -791,7 +791,7 @@ test('deletion selects the newer neighbor, falls back to the older neighbor, and
     assert.equal(run('selectedPhotoId'), null);
     assert.equal(run('capturePhase'), 'live');
     assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(activeUrls.size, 1); // The last deleted thumbnail is retained for undo.
+    assert.equal(activeUrls.size, 3); // Every deleted thumbnail is retained for undo until the next successful capture.
   } finally {
     run('resetCamera(); photos.clear();');
   }
@@ -932,7 +932,7 @@ test('leaving warns only for unsaved photos and updates after download, deletion
   }
 });
 
-test('100 captures retain only thumbnails URLs and release originals, images, downloads after deletion', async () => {
+test('100 captures retain thumbnails and undo history while releasing preview and download URLs after deletion', async () => {
   const { run, activeUrls, encodings, elements } = setup();
   run(`reducedMotion.matches = true;
     stream = { getTracks: () => [], getVideoTracks: () => [{ getSettings: () => ({}) }] };
@@ -962,12 +962,78 @@ test('100 captures retain only thumbnails URLs and release originals, images, do
       assert.equal(run('photos.list().length'), remaining - 1);
       assert.equal(run('thumbnailImages.size'), remaining - 1);
       assert.equal(run('downloads.size'), 0);
-      assert.equal(activeUrls.size, remaining > 1 ? remaining + 1 : 1);
+      assert.equal(activeUrls.size, remaining > 1 ? 101 : 100);
     }
     assert.equal(elements.get('#gallery-list').children.length, 0);
     assert.equal(elements.get('#captured-photo').src, undefined);
   } finally {
     run('clearPhoto(); photos.clear(); for (const url of downloads.keys()) releaseDownload(url);');
+  }
+});
+
+test('multiple deleted photos can be restored one by one with their order and download state intact', async () => {
+  const { run, elements } = setup();
+  try {
+    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
+      photos.markDownloaded(2);`);
+    await run('showPhoto(photos.get(2))');
+    for (let i = 0; i < 3; i++) await run('deleteSelectedPhoto()');
+    for (const [index, id] of [1, 3, 2].entries()) {
+      await run('undoDelete()');
+      assert.equal(run('selectedPhotoId'), id);
+      assert.equal(elements.get('#gallery-list').children.length, index + 1);
+      assert.equal(elements.get('#undo-delete').hidden, index === 2);
+    }
+    assert.equal(run('photos.list().map(photo => photo.id).join()'), '3,2,1');
+    assert.equal(run('photos.get(2).downloadStarted'), true);
+  } finally {
+    run('resetCamera(); photos.clear();');
+  }
+});
+
+test('cancelled and failed captures preserve all undo history; only successful capture discards it', async () => {
+  const { run, elements, pending, activeUrls } = setup({deferPng: true});
+  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
+    reducedMotion.matches = true;
+    for (let i = 0; i < 2; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
+    photos.removeUndoable(1); photos.removeUndoable(2); setBusy(false);`);
+  const deletedUrls = [...activeUrls.keys()];
+  try {
+    elements.get('#timer').value = '3';
+    run('startShooting(); cancelCountdown();');
+    assert.equal(run('photos.canUndo'), true);
+    assert.deepEqual([...activeUrls.keys()], deletedUrls);
+    const failed = run('capturePhoto()');
+    pending[0].callback(null);
+    await failed;
+    assert.equal(run('photos.canUndo'), true);
+    assert.deepEqual([...activeUrls.keys()], deletedUrls);
+
+    run(`var originalCreateElement = document.createElement;
+      document.createElement = tag => {
+        const element = originalCreateElement(tag);
+        if (tag === 'img') element.decode = () => Promise.reject(new Error('decode failed'));
+        return element;
+      };`);
+    const failedPreview = run('capturePhoto()');
+    pending[1].callback(new Blob(['png']));
+    await failedPreview;
+    assert.equal(run('photos.canUndo'), true);
+    assert.deepEqual([...activeUrls.keys()], deletedUrls);
+    run('document.createElement = originalCreateElement;');
+
+    const successful = run('capturePhoto()');
+    assert.equal(run('photos.canUndo'), true);
+    pending[2].callback(new Blob(['png']));
+    await successful;
+    assert.equal(run('photos.canUndo'), false);
+    assert.equal(run('photos.undoRemove()'), null);
+    assert.equal(elements.get('#undo-delete').hidden, true);
+    assert.equal(activeUrls.size, 1);
+    for (const url of deletedUrls) assert.equal(activeUrls.has(url), false);
+  } finally {
+    run('resetCamera(); photos.clear();');
+    assert.equal(activeUrls.size, 0);
   }
 });
 

@@ -35,7 +35,7 @@ test('retain original PNG, allocate URLs only for thumbnails, release deleted re
   }
 });
 
-test('undo retains one deleted photo, restores its original order, and releases replaced or cleared history', () => {
+test('undo restores multiple deletions in reverse order and releases only discarded history', () => {
   const revoke = URL.revokeObjectURL;
   const released = [];
   URL.revokeObjectURL = url => { released.push(url); revoke(url); };
@@ -54,14 +54,25 @@ test('undo retains one deleted photo, restores its original order, and releases 
     assert.equal(store.undoRemove(), null);
     store.removeUndoable(first.id);
     store.removeUndoable(third.id);
-    assert.deepEqual(released, [first.thumbnailUrl]);
+    assert.deepEqual(released, []);
     assert.equal(store.undoRemove(), third);
+    assert.equal(store.canUndo, true);
     assert.equal(store.get(first.id), undefined);
+    assert.equal(store.undoRemove(), first);
+    assert.deepEqual(store.list().map(photo => photo.id), [third.id, second.id, first.id]);
+    store.removeUndoable(first.id);
     store.removeUndoable(second.id);
+    store.clearUndoHistory();
+    assert.deepEqual(released, [first.thumbnailUrl, second.thumbnailUrl]);
+    assert.equal(store.canUndo, false);
+    assert.equal(store.undoRemove(), null);
+    assert.equal(store.get(third.id), third);
+    store.removeUndoable(third.id);
     store.clear();
     assert.equal(store.canUndo, false);
     assert.equal(store.undoRemove(), null);
     assert.equal(new Set(released).size, 3);
+    assert.equal(released.length, 3);
   } finally {
     store.clear();
     URL.revokeObjectURL = revoke;

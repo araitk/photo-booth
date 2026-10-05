@@ -11,7 +11,7 @@ export interface Photo {
 export class PhotoStore {
   private photos = new Map<number, Photo>();
   private nextId = 1;
-  private deletedPhoto: Photo | null = null;
+  private deletedPhotos: Photo[] = [];
 
   add(original: Blob, thumbnail: Blob, width: number, height: number): Photo {
     const photo: Photo = {
@@ -25,7 +25,7 @@ export class PhotoStore {
   get(id: number): Photo | undefined { return this.photos.get(id); }
   list(): Photo[] { return [...this.photos.values()].sort((a, b) => b.id - a.id); }
 
-  get canUndo(): boolean { return this.deletedPhoto !== null; }
+  get canUndo(): boolean { return this.deletedPhotos.length > 0; }
   get hasUnsavedPhotos(): boolean { return [...this.photos.values()].some(photo => !photo.downloadStarted); }
 
   markDownloaded(id: number): void {
@@ -36,17 +36,20 @@ export class PhotoStore {
   removeUndoable(id: number): void {
     const photo = this.photos.get(id);
     if (!photo) return;
-    if (this.deletedPhoto) URL.revokeObjectURL(this.deletedPhoto.thumbnailUrl);
-    this.deletedPhoto = photo;
+    this.deletedPhotos.push(photo);
     this.photos.delete(id);
   }
 
   undoRemove(): Photo | null {
-    const photo = this.deletedPhoto;
+    const photo = this.deletedPhotos.pop();
     if (!photo) return null;
     this.photos.set(photo.id, photo);
-    this.deletedPhoto = null;
     return photo;
+  }
+
+  clearUndoHistory(): void {
+    for (const photo of this.deletedPhotos) URL.revokeObjectURL(photo.thumbnailUrl);
+    this.deletedPhotos = [];
   }
 
   remove(id: number): void {
@@ -58,8 +61,7 @@ export class PhotoStore {
 
   clear(): void {
     for (const id of this.photos.keys()) this.remove(id);
-    if (this.deletedPhoto) URL.revokeObjectURL(this.deletedPhoto.thumbnailUrl);
-    this.deletedPhoto = null;
+    this.clearUndoHistory();
   }
 }
 

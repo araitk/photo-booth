@@ -401,6 +401,9 @@ async function capturePhoto() {
     if (!await showPhoto(photo, true)) {
       photos.remove(photo.id);
       renderGallery();
+    } else {
+      photos.clearUndoHistory();
+      setBusy(busy);
     }
   } catch {
     if (version === captureVersion) {
