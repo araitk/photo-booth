@@ -36,3 +36,13 @@ pnpm test     # 自動テスト
 pnpm build    # 型チェック・ビルド
 pnpm preview  # ビルド結果の確認
 ```
+
+ブラウザでの回帰テストは、初回にテスト用ブラウザをインストールして実行します。
+
+```sh
+pnpm exec playwright install chromium firefox webkit
+pnpm test:e2e
+```
+
+撮影テストはChromiumの仮想カメラを使い、実機のカメラにはアクセスしません。
+言語・設定・キーボード操作はChromium・Firefox・WebKitで確認します。
