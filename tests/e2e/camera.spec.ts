@@ -18,7 +18,7 @@ test('capture, review, download, deletion and undo work with real media and anim
   const downloadPromise = page.waitForEvent('download');
   await page.locator('#download-photo').click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toMatch(/^photo-\d{8}-\d{6}\.png$/);
+  expect(download.suggestedFilename()).toMatch(/^photo-\d{8}-\d{6}-\d{2}\.png$/);
   const png = await readFile((await download.path())!);
   expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
   const dimensions = await page.locator('#camera').evaluate((video: HTMLVideoElement) => [video.videoWidth, video.videoHeight]);
