@@ -32,10 +32,14 @@ pnpm dev
 表示されたlocalhostのURLをブラウザで開きます。
 
 ```sh
-pnpm test     # 自動テスト
-pnpm build    # 型チェック・ビルド
-pnpm preview  # ビルド結果の確認
+pnpm test       # 自動テスト
+pnpm typecheck  # 型・未使用コードのチェック
+pnpm build      # 型チェック・ビルド
+pnpm preview    # ビルド結果の確認
 ```
+
+`pnpm typecheck`はアプリ本体・E2Eテスト・Playwright/Vite設定を検証します。
+`pnpm build`でも同じチェックを実行します。
 
 ブラウザでの回帰テストは、初回にテスト用ブラウザをインストールして実行します。
 
