@@ -4,1236 +4,725 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
 
-function setup({ deferPng = false, storage = new Map(), storageBlocked = false, browserLanguage = 'ja-JP' } = {}) {
-  const elements = new Map();
-  let finishAnimation;
-  let nextUrl = 0;
-  const activeUrls = new Map();
-  const encodings = [];
-  const pending = [];
-  function element() {
-    return {
-      value: '1080', readyState: 2, videoWidth: 1920, videoHeight: 1080,
+const compiledModules = new Map();
+function deferred() {
+  let resolve, reject;
+  const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+async function flush() { for (let i = 0; i < 30; i++) await Promise.resolve(); }
+
+async function setup({ deferPng = false, storage = new Map(), storageBlocked = false,
+  browserLanguage = 'ja-JP', reducedMotion = false, unsupported = false } = {}) {
+  const elements = new Map(), activeUrls = new Map(), timers = new Map();
+  const animations = [], pending = [], encodings = [], requests = [], tracks = [], clickedDownloads = [];
+  const motion = { matches: reducedMotion };
+  let nextUrl = 0, nextTimer = 0, now = 0;
+  let document;
+  function element(tag = 'div') {
+    const classes = new Set();
+    const node = {
+      tagName: tag.toUpperCase(), value: '', readyState: 2, videoWidth: 1920, videoHeight: 1080,
       clientWidth: 1200, clientHeight: 675, hidden: false, disabled: false,
-      style: {}, dataset: {}, children: [], scrollLeft: 0,
-      classList: { add() {}, remove() {}, toggle() {} },
-      listeners: new Map(),
+      style: {}, dataset: {}, children: [], scrollLeft: 0, listeners: new Map(),
+      classList: { add: name => classes.add(name), remove: name => classes.delete(name),
+        contains: name => classes.has(name), toggle(name, force = !classes.has(name)) { if (force) classes.add(name); else classes.delete(name); } },
       addEventListener(name, callback) { this.listeners.set(name, callback); },
-      replaceChildren(...children) { this.children = children; },
-      cloneNode() { return Object.assign(element(), { src: this.src, alt: this.alt, id: this.id, children: this.children.map(child => child.cloneNode()) }); },
-      append(...children) { this.children.push(...children); },
-      setAttribute(name, value) { this[name] = value; },
-      removeAttribute(name) { delete this[name]; },
-      remove() {},
-      click() {},
-      scrollIntoView(options) { this.scrollOptions = options; },
-      showModal() { this.open = true; },
-      close() { this.open = false; },
-      querySelectorAll() { return this.children; },
-      querySelector() { return null; },
-      getBoundingClientRect: () => ({ left: 100, top: 600, width: 96, height: 54 }),
-      async decode() { this.decoded = true; },
+      replaceChildren(...children) { for (const child of this.children) if (typeof child === 'object') child.parent = undefined; this.children = []; this.append(...children); },
+      append(...children) { for (const child of children) { if (typeof child === 'object') { child.remove(); child.parent = this; } this.children.push(child); } },
+      cloneNode(deep) { const copy = Object.assign(element(tag), { src: this.src, alt: this.alt, id: this.id, className: this.className }); if (deep) copy.append(...this.children.map(child => typeof child === 'object' ? child.cloneNode(true) : child)); return copy; },
+      setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
+      remove() { if (this.parent) { this.parent.children = this.parent.children.filter(child => child !== this); this.parent = undefined; } },
+      click() { if (tag === 'a') clickedDownloads.push({ href: this.href, download: this.download }); this.listeners.get('click')?.({ detail: 0 }); },
+      blur() { this.blurred = true; }, scrollIntoView(options) { this.scrollOptions = options; },
+      showModal() { this.open = true; }, close() { this.open = false; this.listeners.get('close')?.(); },
+      closest(selector) { return selector.includes(tag) ? this : null; },
+      querySelectorAll(selector) { return this.children.filter(child => typeof child === 'object' && (selector === '.thumbnail' ? child.className === 'thumbnail' : true)); },
+      querySelector(selector) { const match = selector.match(/data-photo-id="(\d+)"/); return match ? this.children.find(child => child.dataset?.photoId === match[1]) ?? null : null; },
+      getBoundingClientRect() { return { left: this.parent?.children.indexOf(this) * 104 || 100, top: 600, width: 96, height: 54 }; },
+      async play() {}, async decode() { this.decoded = true; },
       getContext() { return { drawImage() {} }; },
       toBlob(callback, type) {
-        if (deferPng && type === "image/png") { pending.push({ canvas: this, callback }); return; }
-        const result = new Blob([type], { type });
-        encodings.push({ canvas: this, callback, result });
-        callback(result);
+        encodings.push(this);
+        if (deferPng && type === 'image/png') { pending.push({ canvas: this, callback }); return; }
+        callback(new Blob([type], { type }));
       },
       animationCalls: [],
       animate(frames, options) {
-        assert([180, 300, 2000].includes(options.duration));
-        const animation = { finished: new Promise(resolve => { finishAnimation = resolve; }), cancelled: false, cancel() { this.cancelled = true; } };
-        this.animationCalls.push({frames, options, animation});
-        return animation;
+        const completion = deferred();
+        const animation = { element: this, frames, options, finished: completion.promise, cancelled: false,
+          settled: false, finish() { this.settled = true; completion.resolve(); }, cancel() { this.cancelled = true; completion.reject(new Error('cancelled')); } };
+        this.animationCalls.push(animation); animations.push(animation); return animation;
       },
+      async requestFullscreen() { document.fullscreenElement = this; document.listeners.get('fullscreenchange')?.(); },
     };
+    return node;
   }
-  const document = {
-    body: element(),
-    documentElement: {},
-    querySelectorAll: () => [],
-    fullscreenEnabled: false, fullscreenElement: null,
+  document = {
+    body: element('body'), documentElement: {}, listeners: new Map(), hidden: false,
+    fullscreenEnabled: true, fullscreenElement: null, querySelectorAll: () => [],
     querySelector(selector) {
-      if (!elements.has(selector)) elements.set(selector, element());
+      if (!elements.has(selector)) {
+        const tag = selector === '#camera' ? 'video' : ['#resolution', '#camera-select', '#language', '#timer'].includes(selector) ? 'select' : selector === '#captured-photo' ? 'img' : 'div';
+        const node = element(tag);
+        if (selector === '#resolution') node.value = '1080';
+        if (selector === '#timer') node.value = '0';
+        if (selector === '#photo-review') node.hidden = true;
+        elements.set(selector, node);
+      }
       return elements.get(selector);
     },
-    createElement: () => element(), createTextNode: text => text,
-    listeners: new Map(),
+    createElement: tag => element(tag), createTextNode: text => text,
     addEventListener(name, callback) { this.listeners.set(name, callback); },
+    async exitFullscreen() { this.fullscreenElement = null; this.listeners.get('fullscreenchange')?.(); },
   };
-  const context = vm.createContext({
-    document, navigator: { language: browserLanguage },
-    localStorage: {
-      getItem(key) { if (storageBlocked) throw new Error('storage blocked'); return storage.get(key) ?? null; },
-      setItem(key, value) { if (storageBlocked) throw new Error('storage blocked'); storage.set(key, value); },
-    },
-    window: {
-      listeners: new Map(), matchMedia: () => ({ matches: false }),
+  const window = { listeners: new Map(), matchMedia: () => motion,
+    addEventListener(name, callback) { this.listeners.set(name, callback); },
+    removeEventListener(name) { this.listeners.delete(name); } };
+  const mediaDevices = { listeners: new Map(),
+    addEventListener(name, callback) { this.listeners.set(name, callback); },
+    enumerateDevices: async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'}, {kind: 'videoinput', deviceId: 'usb', label: 'USBカメラ'}, {kind: 'audioinput', deviceId: 'mic'}],
+    async getUserMedia(options) { requests.push(options); return makeStream(options.video.deviceId?.exact || 'built-in'); },
+  };
+  function makeStream(id = 'built-in') {
+    let settings = {deviceId: id, width: 1920, height: 1080, frameRate: 30};
+    const track = { stopped: false, listeners: new Map(), stop() { this.stopped = true; },
       addEventListener(name, callback) { this.listeners.set(name, callback); },
-      removeEventListener(name) { this.listeners.delete(name); },
-    },
-    ResizeObserver: class { observe() {} },
-    URL: {
-      createObjectURL(blob) { const url = `blob:${++nextUrl}`; activeUrls.set(url, blob); return url; },
-      revokeObjectURL(url) { activeUrls.delete(url); },
-    },
-    Date, Blob, setTimeout, clearTimeout, DOMException,
-  });
-  for (const file of ['photo-store.ts', 'return-effects.ts', 'i18n.ts', 'settings.ts', 'main.ts']) {
-    const source = readFileSync(new URL(`../src/${file}`, import.meta.url), 'utf8')
-      .replace(/^import .*;\n/gm, '').replaceAll('export ', '');
-    const compiled = ts.transpileModule(source, {
-      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
-    }).outputText;
-    vm.runInContext(compiled, context);
-  }
-  const run = source => vm.runInContext(source, context);
-  return { elements, context, run, finish: () => finishAnimation(), completion: () => finishAnimation, document, activeUrls, encodings, pending };
-}
-
-test('camera selection lists video inputs, switches devices, and keeps the original stream on failure', async () => {
-  const storage = new Map();
-  const { run, context, elements } = setup({storage});
-  const tracks = [];
-  const requests = [];
-  const makeStream = id => {
-    const track = {
-      stopped: false, stop() { this.stopped = true; }, addEventListener() {},
-      getSettings: () => ({ deviceId: id, width: 1920, height: 1080, frameRate: 30 }),
-    };
+      getSettings: () => settings, getConstraints: () => ({}),
+      async applyConstraints(value) { if (value.height?.exact) settings = {...settings, width: value.width.exact, height: value.height.exact}; } };
     tracks.push(track);
     return { getTracks: () => [track], getVideoTracks: () => [track] };
-  };
-  context.navigator.mediaDevices = {
-    enumerateDevices: async () => [
-      {kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'},
-      {kind: 'audioinput', deviceId: 'mic', label: 'マイク'},
-      {kind: 'videoinput', deviceId: 'usb', label: 'USBカメラ'},
-    ],
-    getUserMedia: async options => {
-      requests.push(options);
-      if (options.video.deviceId?.exact === 'unavailable') throw new DOMException('not available', 'NotReadableError');
-      return makeStream(options.video.deviceId?.exact || 'built-in');
-    },
-  };
-  elements.get('#camera').play = async () => {};
-  try {
-    await run('updateCameraList()');
-    const selector = elements.get('#camera-select');
-    assert.deepEqual(selector.children.map(option => option.value), ['', 'built-in', 'usb']);
-    await run('openCamera()');
-    assert.equal(selector.value, 'built-in');
-    assert.equal(selector.disabled, false);
-    selector.value = 'usb';
-    await selector.listeners.get('change')();
-    assert.equal(requests[1].video.deviceId.exact, 'usb');
-    assert.equal(requests[1].audio, false);
-    assert.equal(tracks[0].stopped, true);
-    assert.equal(tracks[1].stopped, false);
-    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'usb');
-    const active = run('stream');
-    selector.value = 'unavailable';
-    await selector.listeners.get('change')();
-    assert.equal(run('stream'), active);
-    assert.equal(selector.value, 'usb');
-    assert.equal(tracks[1].stopped, false);
-    assert.equal(elements.get('#camera').srcObject, active);
-    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'usb');
-    run("capturePhase = 'review'; setBusy(false);");
-    assert.equal(selector.disabled, false);
-  } finally {
-    run('resetCamera();');
   }
-});
-
-test('camera changes during capture are deferred until the gallery animation finishes and use the latest choice', async () => {
-  const { run, context, elements, pending, finish } = setup({deferPng: true});
-  const requests = [];
-  const tracks = [];
-  context.navigator.mediaDevices = {
-    enumerateDevices: async () => ['built-in', 'usb', 'external'].map(id => ({kind: 'videoinput', deviceId: id, label: id})),
-    getUserMedia: async options => {
-      const id = options.video.deviceId?.exact || 'built-in';
-      requests.push(id);
-      const track = {stop() {}, addEventListener() {}, getSettings: () => ({deviceId: id, width: 1920, height: 1080})};
-      tracks.push(track);
-      return {getTracks: () => [track], getVideoTracks: () => [track]};
-    },
-  };
-  elements.get('#camera').play = async () => {};
-  try {
-    await run('updateCameraList();');
-    await run('openCamera()');
-    const capturing = run('capturePhoto()');
-    const selector = elements.get('#camera-select');
-    assert.equal(selector.disabled, false);
-    selector.value = 'usb';
-    await selector.listeners.get('change')();
-    selector.value = 'external';
-    await selector.listeners.get('change')();
-    assert.deepEqual(requests, ['built-in']);
-    pending[0].callback(new Blob(['png'], {type: 'image/png'}));
-    await capturing;
-    assert.equal(run('capturePhase'), 'returning');
-    assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
-    assert.deepEqual(requests, ['built-in']);
-    finish();
-    for (let i = 0; i < 12; i++) await run('Promise.resolve()');
-    assert.deepEqual(requests, ['built-in', 'external']);
-    assert.equal(selector.value, 'external');
-    assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(run('capturePhase'), 'live');
-    assert.equal(elements.get('#live-badge').children[1], ' LIVE');
-  } finally {
-    run('resetCamera(); photos.clear();');
+  const context = vm.createContext({ document, window, navigator: {language: browserLanguage, mediaDevices: unsupported ? undefined : mediaDevices},
+    localStorage: { getItem(key) { if (storageBlocked) throw new Error('blocked'); return storage.get(key) ?? null; },
+      setItem(key, value) { if (storageBlocked) throw new Error('blocked'); storage.set(key, value); } },
+    ResizeObserver: class { observe() {} }, Blob, DOMException,
+    Date: class extends Date { static now() { return now; } },
+    URL: { createObjectURL(blob) { const url = `blob:${++nextUrl}`; activeUrls.set(url, blob); return url; }, revokeObjectURL: url => activeUrls.delete(url) },
+    setTimeout(callback, delay) { const id = ++nextTimer; timers.set(id, {callback, deadline: now + delay}); return id; },
+    clearTimeout: id => timers.delete(id),
+  });
+  const modules = new Map();
+  function load(name) {
+    if (modules.has(name)) return modules.get(name).exports;
+    if (!compiledModules.has(name)) compiledModules.set(name, ts.transpileModule(readFileSync(new URL(`../src/${name}.ts`, import.meta.url), 'utf8'),
+      {compilerOptions: {target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS}}).outputText);
+    const module = {exports: {}};
+    modules.set(name, module);
+    const evaluate = vm.runInContext(`(function(require, module, exports) { ${compiledModules.get(name)}\n})`, context);
+    evaluate(specifier => load(specifier.replace('./', '')), module, module.exports);
+    return module.exports;
   }
-});
-
-test('saved camera selection is restored, survives hidden devices before permission, and resets when unavailable', async () => {
-  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '0', resolution: '1080', cameraId: 'usb'})]]);
-  const { run, context, elements } = setup({storage});
-  context.navigator.mediaDevices = { enumerateDevices: async () => [] };
-  await run('updateCameraList()');
-  assert.equal(run('preferredCameraId'), 'usb');
-  context.navigator.mediaDevices.enumerateDevices = async () => [{kind: 'videoinput', deviceId: 'usb', label: 'USBカメラ'}];
-  await run('updateCameraList()');
-  assert.equal(elements.get('#camera-select').value, 'usb');
-  elements.get('#camera-select').value = '';
-  await elements.get('#camera-select').listeners.get('change')();
-  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, '');
-  elements.get('#camera-select').value = 'usb';
-  await elements.get('#camera-select').listeners.get('change')();
-  const reloaded = setup({storage});
-  assert.equal(reloaded.run('preferredCameraId'), 'usb');
-  reloaded.context.navigator.mediaDevices = { enumerateDevices: async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'}] };
-  await reloaded.run('updateCameraList()');
-  assert.equal(reloaded.elements.get('#camera-select').value, '');
-  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, '');
-});
-
-test('starting with a missing saved camera falls back to automatic and remembers the camera actually used', async () => {
-  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '0', resolution: '1080', cameraId: 'missing'})]]);
-  const { run, context, elements } = setup({storage});
-  const requests = [];
-  const track = { stop() {}, addEventListener() {}, getSettings: () => ({deviceId: 'built-in', width: 1920, height: 1080}) };
-  context.navigator.mediaDevices = {
-    getUserMedia: async options => {
-      requests.push(options);
-      if (options.video.deviceId) throw new DOMException('camera removed', 'NotFoundError');
-      return {getTracks: () => [track], getVideoTracks: () => [track]};
-    },
-    enumerateDevices: async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵カメラ'}],
-  };
-  elements.get('#camera').play = async () => {};
-  try {
-    await run('openCamera()');
-    assert.equal(requests[0].video.deviceId.exact, 'missing');
-    assert.equal(requests[1].video.deviceId, undefined);
-    assert.equal(elements.get('#camera-select').value, 'built-in');
-    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).cameraId, 'built-in');
-  } finally {
-    run('resetCamera()');
-  }
-});
-
-test('timer and successfully applied resolution settings persist across reloads, including resolution rollback', async () => {
-  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({timer: '5', resolution: '720'})]]);
-  const { run, elements } = setup({storage});
-  assert.equal(elements.get('#timer').value, '5');
-  assert.equal(elements.get('#resolution').value, '720');
-  assert.equal(run('appliedResolution'), '720');
-  elements.get('#timer').value = '10';
-  elements.get('#timer').listeners.get('change')();
-  run(`stream = { getVideoTracks: () => [{
-    getConstraints: () => ({}), getSettings: () => ({}),
-    applyConstraints: async value => { if (value.height?.exact === 2160) throw new Error('unsupported'); }
-  }] };`);
-  elements.get('#resolution').value = '1080';
-  await elements.get('#resolution').listeners.get('change')();
-  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '1080');
-  elements.get('#resolution').value = '2160';
-  await elements.get('#resolution').listeners.get('change')();
-  assert.equal(elements.get('#resolution').value, '1080');
-  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '1080');
-  const reloaded = setup({storage});
-  assert.equal(reloaded.elements.get('#timer').value, '10');
-  assert.equal(reloaded.elements.get('#resolution').value, '1080');
-});
-
-test('resolution and timer remain enabled before starting and during review, and rapid resolution changes apply the latest choice', async () => {
-  const storage = new Map();
-  const { run, context, elements } = setup({storage});
-  const selector = elements.get('#resolution');
-  run('setBusy(false);');
-  assert.equal(selector.disabled, false);
-  assert.equal(elements.get('#timer').disabled, false);
-  selector.value = '720';
-  await selector.listeners.get('change')();
-  assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '720');
-  const applied = [];
-  let finishFirst;
-  context.testTrack = {
-    getConstraints: () => ({}), getSettings: () => ({}),
-    applyConstraints: options => {
-      applied.push(options.height.exact);
-      return applied.length === 1 ? new Promise(resolve => { finishFirst = resolve; }) : Promise.resolve();
-    },
-  };
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [testTrack]};
-    photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-  try {
-    await run('showPhoto(photos.get(1))');
-    const image = run('capturedPhoto');
-    const firstChange = selector.listeners.get('change')();
-    assert.equal(selector.disabled, false);
-    assert.equal(elements.get('#timer').disabled, false);
-    selector.value = '2160';
-    await selector.listeners.get('change')();
-    finishFirst();
-    await firstChange;
-    await run('Promise.resolve()');
-    await run('Promise.resolve()');
-    assert.deepEqual(applied, [720, 2160]);
-    assert.equal(selector.value, '2160');
-    assert.equal(run('appliedResolution'), '2160');
-    assert.equal(run('capturedPhoto'), image);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(JSON.parse(storage.get('photo-booth.settings.v1')).resolution, '2160');
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
-});
-
-test('language defaults to the browser, respects saved choices, and tolerates invalid or blocked storage', () => {
-  for (const browserLanguage of ['en-US', 'fr-FR', 'ja-JP']) {
-    const { run, document, elements } = setup({browserLanguage});
-    const expected = browserLanguage.startsWith('ja') ? 'ja' : 'en';
-    assert.equal(run('getLanguage()'), expected);
-    assert.equal(document.documentElement.lang, expected);
-    assert.equal(elements.get('#language').value, expected);
-  }
-  const storage = new Map([['photo-booth.settings.v1', JSON.stringify({language: 'ja'})]]);
-  assert.equal(setup({browserLanguage: 'en-US', storage}).run('getLanguage()'), 'ja');
-  storage.set('photo-booth.settings.v1', JSON.stringify({language: 'invalid'}));
-  assert.equal(setup({browserLanguage: 'en-US', storage}).run('getLanguage()'), 'en');
-  assert.equal(setup({browserLanguage: 'en-US', storageBlocked: true}).run('getLanguage()'), 'en');
-});
-
-test('switching languages updates photo metadata and errors without interrupting the preview and persists on reload', async () => {
-  const storage = new Map();
-  const { run, elements, activeUrls } = setup({storage});
-  try {
-    run('photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080); photos.markDownloaded(1);');
-    await run('showPhoto(photos.get(1))');
-    run("status.textContent = errorMessage(new DOMException('', 'NotFoundError')); message.textContent = errorMessage(new DOMException('', 'NotAllowedError')); startButton.textContent = t('カメラを開始');");
-    const originalUrls = [...activeUrls.keys()];
-    elements.get('#language').value = 'en';
-    elements.get('#language').listeners.get('change')();
-    assert.equal(run('capturePhase'), 'review');
-    assert.equal(run('selectedPhotoId'), 1);
-    assert.deepEqual([...activeUrls.keys()], originalUrls);
-    assert.equal(elements.get('#gallery-list').children[0]['aria-label'], 'View photo 1 (downloaded)');
-    assert.equal(elements.get('#photo-position')['aria-label'], 'Photo 1 of 1');
-    assert.equal(elements.get('#status').textContent, 'No camera found. Check the connection.');
-    assert.equal(elements.get('#camera-message').textContent, 'Allow camera access in your browser’s site settings.');
-    assert.equal(elements.get('#start-camera').textContent, 'Start camera');
-    assert.equal(setup({storage, browserLanguage: 'ja-JP'}).run('getLanguage()'), 'en');
-    elements.get('#language').value = 'ja';
-    elements.get('#language').listeners.get('change')();
-    assert.equal(elements.get('#status').textContent, 'カメラが見つかりません。接続を確認してください。');
-    assert.equal(elements.get('#gallery-list').children[0]['aria-label'], '写真 1 を表示（ダウンロード済み）');
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
-});
-
-test('pointer operations release control focus while keyboard operations retain it', async () => {
-  const { elements, document } = setup();
-  for (const selector of ['#camera-select', '#resolution', '#timer']) {
-    const control = elements.get(selector);
-    let blurs = 0;
-    control.blur = () => { blurs++; };
-    control.listeners.get('pointerdown')();
-    await control.listeners.get('change')();
-    assert.equal(blurs, 1);
-    control.listeners.get('pointerdown')();
-    control.listeners.get('keydown')();
-    await control.listeners.get('change')();
-    assert.equal(blurs, 1);
-  }
-  const fullscreen = elements.get('#fullscreen');
-  let fullscreenBlurs = 0;
-  fullscreen.blur = () => { fullscreenBlurs++; };
-  fullscreen.listeners.get('click')({detail: 1});
-  fullscreen.listeners.get('click')({detail: 0});
-  assert.equal(fullscreenBlurs, 1);
-
-  const help = elements.get('#shortcut-help');
-  const button = elements.get('#show-shortcuts');
-  let helpBlurs = 0;
-  button.blur = () => { helpBlurs++; };
-  button.listeners.get('click')({detail: 1});
-  assert.equal(helpBlurs, 0);
-  document.activeElement = button;
-  help.close();
-  help.listeners.get('close')();
-  assert.equal(helpBlurs, 1);
-  button.listeners.get('click')({detail: 0});
-  help.close();
-  help.listeners.get('close')();
-  assert.equal(helpBlurs, 1);
-});
-
-test('invalid or unavailable saved settings do not prevent camera initialization or control changes', () => {
-  for (const value of ['broken json', 'null', JSON.stringify({timer: '999', resolution: '8K'})]) {
-    const { run, elements } = setup({storage: new Map([['photo-booth.settings.v1', value]])});
-    // The mock uses 1080 for every initial value; invalid stored values leave the DOM defaults intact.
-    assert.equal(elements.get('#timer').value, '1080');
-    assert.equal(elements.get('#resolution').value, '1080');
-    assert.equal(run('appliedResolution'), '1080');
-  }
-  const { elements } = setup({storageBlocked: true});
-  elements.get('#timer').value = '3';
-  assert.doesNotThrow(() => elements.get('#timer').listeners.get('change')());
-  assert.equal(elements.get('#timer').value, '3');
-});
-
-test('append each thumbnail after the return animation finishes while keeping the total count stable', async () => {
-  const { elements, run, finish } = setup();
-  try {
-    for (let count = 1; count <= 2; count++) {
-      run('photos.add(new Blob(["png"], {type:"image/png"}), new Blob(["jpg"], {type:"image/jpeg"}), 1920, 1080);');
-      await run(`showPhoto(photos.get(${count}), true)`);
-      const preparedImage = run(`thumbnailImages.get(${count})`);
-      assert.equal(preparedImage.decoded, true);
-      assert.equal(elements.get('#photo-count').textContent, String(count));
-      assert.equal(elements.get('#gallery-list').children.length, count - 1);
-      assert.equal(run('capturePhase'), 'returning');
-      assert.equal(run('captureReturnInProgress'), true);
-      assert.equal(elements.get('#photo-review').hidden, false);
-      const preview = run('capturedPhoto');
-      const departingImage = run('[...returningPhotos.keys()][0].children[0]');
-      assert.notEqual(preview, departingImage);
-      assert.equal(preview.src, departingImage.src);
-      assert.equal(elements.get('#shutter').disabled, true);
-      assert.equal(elements.get('#live-badge').children[1], ' PHOTO');
-      assert.equal(elements.get('#photo-count').textContent, String(count));
-      assert.equal(elements.get('#gallery-list').children.length, count - 1);
-      finish();
-      for (let i = 0; i < 4; i++) await run('Promise.resolve()');
-      assert.equal(run('capturePhase'), 'live');
-      assert.equal(run('captureReturnInProgress'), false);
-      assert.equal(elements.get('#photo-review').hidden, true);
-      assert.equal(preview.src, undefined);
-      assert.equal(elements.get('#photo-count').textContent, String(count));
-      assert.equal(elements.get('#gallery-list').children.length, count);
-      assert.equal(elements.get('#gallery-list').children[0].dataset.photoId, String(count));
-      assert.equal(elements.get('#gallery-list').children[0].children[0], preparedImage);
-      if (count > 1) {
-        assert.equal(elements.get('#gallery-list').children[1].children[0], run('thumbnailImages.get(1)'));
-      }
-      assert.equal(elements.get('#gallery-list').scrollLeft, 0);
-    }
-  } finally {
-    run('clearPhoto(); photos.clear();');
-  }
-});
-
-
-test('gallery reserves room once for a new photo and keeps it through redraws until the photo arrives', async () => {
-  const { run, elements, finish } = setup();
-  try {
-    run(`photos.add(new Blob(['first']), new Blob(['jpg']), 1920, 1080);
-      photos.add(new Blob(['second']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(2), true)');
-    const spacing = run('gallerySpaceAnimation');
-    assert(spacing);
-    assert.equal(spacing.cancelled, false);
-    assert.equal(elements.get('#gallery-list').children.length, 1);
-    run('renderGallery()');
-    assert.equal(run('gallerySpaceAnimation'), spacing);
-    assert.equal(spacing.cancelled, false);
-    finish();
-    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
-    assert.equal(spacing.cancelled, true);
-    assert.equal(run('gallerySpaceAnimation'), null);
-    assert.equal(elements.get('#gallery-list').children.length, 2);
-    assert.equal(elements.get('#gallery-list').children[0].dataset.photoId, '2');
-    run('reducedMotion.matches = true; photos.add(new Blob(["third"]), new Blob(["jpg"]), 1920, 1080);');
-    await run('showPhoto(photos.get(3), true)');
-    assert.equal(run('gallerySpaceAnimation'), null);
-    assert.equal(elements.get('#gallery-list').children.length, 3);
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
-});
-
-test('Space returns to the camera during capture animation without stopping it or taking another photo', async () => {
-  const { run, elements, document, finish, activeUrls } = setup();
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({width: 1920, height: 1080, frameRate: 30})}]};
-    var shots = 0; startShooting = () => shots++;
-    photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-  try {
-    await run('showPhoto(photos.get(1), true)');
-    const animation = run('[...returningPhotos.values()][0].animation');
+  const app = load('main');
+  const el = selector => document.querySelector(selector);
+  async function change(selector, value) { el(selector).value = value; await el(selector).listeners.get('change')(); await flush(); }
+  async function press(key, extra = {}) {
     let prevented = false;
-    const pressSpace = () => document.listeners.get('keydown')({key: ' ', target: null, preventDefault() { prevented = true; }});
-    pressSpace();
-    assert.equal(prevented, true);
-    assert.equal(run('shots'), 0);
-    assert.equal(run('captureReturnInProgress'), false);
-    assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(elements.get('#shutter').disabled, false);
-    assert.equal(elements.get('#live-badge').children[1], ' LIVE');
-    assert.equal(elements.get('#actual-settings').textContent, '1920 × 1080 / 30 fps');
-    assert.equal(animation.cancelled, false);
-    assert.equal(run('returningPhotos.size'), 1);
-    assert.equal(activeUrls.size, 2);
-    assert.equal(elements.get('#gallery-list').children.length, 0);
-    pressSpace();
-    assert.equal(run('shots'), 1);
-    finish();
-    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
-    assert.equal(run('capturePhase'), 'live');
-    assert.equal(run('returningPhotos.size'), 0);
-    assert.equal(elements.get('#gallery-list').children.length, 1);
-    assert.equal(activeUrls.size, 1);
-  } finally {
-    run('resetCamera(); photos.clear();');
+    document.listeners.get('keydown')({key, preventDefault() { prevented = true; }, ...extra});
+    await flush(); return prevented;
   }
-});
-
-test('photo switching retains the current image until decoding succeeds and cleans up failed or cancelled loads', async () => {
-  const { run, elements, activeUrls } = setup();
-  try {
-    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(1))');
-    const firstImage = run('capturedPhoto');
-    const firstUrl = run('photoUrl');
-    run(`var imageLoads = [];
-      var createElement = document.createElement;
-      document.createElement = tag => {
-        const image = createElement(tag);
-        if (tag === 'img') image.decode = function () {
-          if (this.id !== 'captured-photo') return Promise.resolve();
-          return new Promise((resolve, reject) => imageLoads.push({resolve, reject}));
-        };
-        return image;
-      };`);
-    const switching = run('showPhoto(photos.get(2))');
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(run('capturedPhoto'), firstImage);
-    assert.equal(run('selectedPhotoId'), 1);
-    assert.equal(activeUrls.has(firstUrl), true);
-    run('imageLoads.shift().resolve()');
-    assert.equal(await switching, true);
-    assert.notEqual(run('capturedPhoto'), firstImage);
-    assert.equal(run('selectedPhotoId'), 2);
-    assert.equal(activeUrls.has(firstUrl), false);
-    assert.equal(activeUrls.size, 4);
-
-    const secondImage = run('capturedPhoto');
-    const failed = run('showPhoto(photos.get(3))');
-    run('imageLoads.shift().reject(new Error("decode failed"))');
-    assert.equal(await failed, false);
-    assert.equal(run('capturedPhoto'), secondImage);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(run('selectedPhotoId'), 2);
-    assert.equal(run('capturePhase'), 'review');
-    assert.equal(activeUrls.size, 4);
-
-    const cancelled = run('showPhoto(photos.get(3))');
-    run('resetCamera(); imageLoads.shift().resolve()');
-    assert.equal(await cancelled, false);
-    assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(run('selectedPhotoId'), null);
-    assert.equal(activeUrls.size, 3);
-  } finally {
-    run('clearPhoto(); photos.clear();');
+  async function advance(milliseconds) {
+    now += milliseconds;
+    for (const [id, timer] of [...timers]) if (timer.deadline <= now && timers.delete(id)) timer.callback();
+    await flush();
+  }
+  function addPhoto(label = 'png') { return app.photos.add(new Blob([label]), new Blob(['jpg']), 1920, 1080); }
+  function redraw() {
+    const state = app.capture.getState();
+    app.view.renderGallery(app.photos.list(), state.selectedPhotoId, state.pendingPhotoId, app.capture.getActions().galleryLocked);
+  }
+  const returning = () => el('#media-surface').children.filter(node => node.className === 'photo-review returning-photo');
+  const preview = () => el('#photo-review').children[0];
+  async function close() {
+    window.listeners.get('pagehide')({persisted: false}); await flush();
     assert.equal(activeUrls.size, 0);
-  }
-});
-
-test('countdown captures once at the deadline, supports cancellation, and resets with the camera', () => {
-  const { elements, context, run, document } = setup();
-  let now = 0;
-  let nextTimer = 0;
-  const timers = new Map();
-  context.Date = class extends Date { static now() { return now; } };
-  context.setTimeout = (callback, delay) => {
-    const id = ++nextTimer;
-    timers.set(id, { callback, at: now + delay });
-    return id;
-  };
-  context.clearTimeout = id => timers.delete(id);
-  function advance(ms) {
-    const end = now + ms;
-    while (true) {
-      const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
-      if (!next || next[1].at > end) break;
-      now = next[1].at;
-      timers.delete(next[0]);
-      next[1].callback();
-    }
-    now = end;
-  }
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-    var captures = 0;
-    capturePhoto = () => { captures++; capturePhase = 'capturing'; setBusy(false); };
-    setBusy(false);`);
-  const timer = elements.get('#timer');
-  const countdown = elements.get('#countdown');
-  const shutter = elements.get('#shutter');
-  for (const seconds of [3, 5, 10]) {
-    run("clearPhoto(); captures = 0;");
-    timer.value = String(seconds);
-    run('startShooting()');
-    assert.equal(countdown.textContent, String(seconds));
-    assert.equal(countdown.hidden, false);
-    assert.equal(shutter['aria-label'], '撮影をキャンセル');
-    assert.equal(timer.disabled, false);
-    assert.equal(elements.get('#resolution').disabled, false);
-    advance(1000);
-    assert.equal(countdown.textContent, String(seconds - 1));
-    advance((seconds - 1) * 1000 - 1);
-    assert.equal(run('captures'), 0);
-    advance(1);
-    assert.equal(run('captures'), 1);
-    assert.equal(countdown.hidden, true);
-    run('startShooting()');
-    advance(2000);
-    assert.equal(run('captures'), 1);
-  }
-  for (const cancel of [
-    () => run('startShooting()'),
-    () => document.listeners.get('keydown')({ key: 'Escape', preventDefault() {} }),
-    () => { document.hidden = true; document.listeners.get('visibilitychange')(); },
-    () => run('resetCamera()'),
-  ]) {
-    run("clearPhoto(); captures = 0; stream = {getTracks: () => []}; setBusy(false);");
-    timer.value = '3';
-    run('startShooting()');
-    advance(1000);
-    cancel();
-    assert.equal(countdown.hidden, true);
-    advance(5000);
-    assert.equal(run('captures'), 0);
     assert.equal(timers.size, 0);
   }
-  run('stream = {getTracks: () => []}; setBusy(false);');
-  timer.value = '0';
-  run('startShooting()');
-  assert.equal(run('captures'), 1);
-  assert.equal(countdown.hidden, true);
-});
-
-test('keyboard shortcuts dispatch the intended actions and ignore repeats, modifiers, and form controls', () => {
-  const { run, document, elements } = setup();
-  run(`var shots = 0, saves = 0, fullscreens = 0, closes = 0, navigated = [];
-    startShooting = () => shots++;
-    downloadSelectedPhoto = () => saves++;
-    toggleFullscreen = async () => fullscreens++;
-    returnToCamera = async () => closes++;
-    showPhoto = async photo => { navigated.push(photo.id); selectedPhotoId = photo.id; };
-    for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
-    capturePhase = 'review'; selectedPhotoId = 2;`);
-  const press = (key, extra = {}) => {
-    let prevented = false;
-    document.listeners.get('keydown')({ key, preventDefault() { prevented = true; }, ...extra });
-    return prevented;
-  };
-  try {
-    elements.get('#fullscreen').disabled = false;
-    elements.get('#shutter').disabled = false;
-    run("capturePhase = 'live';");
-    assert.equal(press(' '), true);
-    assert.equal(run('shots'), 1);
-    run("capturePhase = 'review';");
-    press(' ');
-    assert.equal(run('closes'), 1);
-    assert.equal(run('shots'), 1);
-    assert.equal(press('s'), true);
-    assert.equal(run('saves'), 1);
-    assert.equal(press('F'), true);
-    assert.equal(run('fullscreens'), 1);
-    press('ArrowLeft');
-    assert.equal(run('selectedPhotoId'), 1);
-    press('ArrowLeft');
-    assert.equal(run('navigated.length'), 1);
-    press('ArrowRight');
-    assert.equal(run('selectedPhotoId'), 2);
-    run('selectedPhotoId = 3;');
-    press('ArrowLeft', { repeat: true });
-    assert.equal(run('selectedPhotoId'), 2);
-    press('ArrowLeft', { repeat: true });
-    assert.equal(run('selectedPhotoId'), 1);
-    run('selectedPhotoId = 2;');
-    press('Escape');
-    assert.equal(run('closes'), 2);
-    document.fullscreenElement = {};
-    assert.equal(press('Escape'), false);
-    assert.equal(run('closes'), 2);
-    document.fullscreenElement = null;
-    for (const extra of [{repeat: true}, {isComposing: true}, {ctrlKey: true}, {metaKey: true}, {altKey: true}, {target: {closest: () => ({})}}]) {
-      assert.equal(press(' ', extra), false);
-      assert.equal(press('s', extra), false);
-    }
-    assert.equal(run('shots'), 1);
-    assert.equal(run('saves'), 1);
-    run("capturePhase = 'capturing';");
-    press('s'); press('ArrowLeft');
-    assert.equal(run('saves'), 1);
-    assert.equal(run('selectedPhotoId'), 2);
-    run("capturePhase = 'live'; selectedPhotoId = null; stream = {};");
-    press('ArrowLeft');
-    assert.equal(run('selectedPhotoId'), 3);
-    run("capturePhase = 'live'; selectedPhotoId = null;");
-    press('ArrowRight');
-    assert.equal(run('selectedPhotoId'), 1);
-    run('selectedPhotoId = null; photos.clear();');
-    press('ArrowLeft'); press('ArrowRight');
-    assert.equal(run('selectedPhotoId'), null);
-  } finally {
-    run('clearPhoto(); photos.clear();');
-  }
-});
-
-test('vertical arrows reopen the last viewed photo, fall back to latest, and leave capture and controls alone', async () => {
-  const { run, document, elements, activeUrls } = setup();
-  const press = (key, extra = {}) => {
-    let prevented = false;
-    document.listeners.get('keydown')({ key, preventDefault() { prevented = true; }, ...extra });
-    return prevented;
-  };
-  run('var opening; var originalShow = showPhoto; showPhoto = (...args) => opening = originalShow(...args); reducedMotion.matches = true;');
-  try {
-    assert.equal(press('ArrowDown'), false);
-    run("for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);");
-    assert.equal(press('ArrowDown'), true);
-    await run('opening');
-    assert.equal(run('selectedPhotoId'), 3);
-    assert.equal(press('ArrowUp'), true);
-    assert.equal(run('selectedPhotoId'), null);
-    await run('showPhoto(photos.get(2))');
-    await run('returnToCamera()');
-    assert.equal(run('lastViewedPhotoId'), 2);
-    press('ArrowDown');
-    await run('opening');
-    assert.equal(run('selectedPhotoId'), 2);
-    document.fullscreenElement = {};
-    press('ArrowUp');
-    assert.equal(run('capturePhase'), 'live');
-    document.fullscreenElement = null;
-    run('photos.remove(2);');
-    press('ArrowDown');
-    await run('opening');
-    assert.equal(run('selectedPhotoId'), 3);
-    press('ArrowUp');
-    for (const extra of [{repeat: true}, {isComposing: true}, {ctrlKey: true}, {metaKey: true}, {altKey: true}, {target: {closest: () => ({})}}]) {
-      assert.equal(press('ArrowDown', extra), false);
-    }
-    elements.get('#shortcut-help').open = true;
-    assert.equal(press('ArrowDown'), false);
-    elements.get('#shortcut-help').open = false;
-    for (const phase of ['countdown', 'capturing']) {
-      run(`capturePhase = '${phase}';`);
-      assert.equal(press('ArrowDown'), false);
-      assert.equal(press('ArrowUp'), false);
-      assert.equal(run('capturePhase'), phase);
-    }
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
-});
-
-test('Space leaves focused buttons and links to native activation during review and capture return', async () => {
-  const { run, document, activeUrls } = setup();
-  try {
-    run("photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);");
-    await run('showPhoto(photos.get(1))');
-    for (const captureReturn of [false, true]) {
-      run(`captureReturnInProgress = ${captureReturn}; capturePhase = '${captureReturn ? 'returning' : 'review'}';`);
-      for (const name of ['download-photo', 'delete-photo', 'photo-review', 'link']) {
-        let prevented = false;
-        const target = { closest: selector => selector === 'button, a' ? { id: name } : null };
-        document.listeners.get('keydown')({ key: ' ', target, preventDefault() { prevented = true; } });
-        assert.equal(prevented, false);
-        assert.equal(run('captureReturnInProgress'), captureReturn);
-        assert.equal(run('selectedPhotoId'), 1);
-      }
-    }
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
-});
-
-test('Delete, Enter and help shortcuts respect selection, camera state and the help dialog', () => {
-  const { run, document, elements } = setup();
-  run(`var deletions = 0, cameraStarts = 0, shots = 0, previewCloses = 0;
-    deleteSelectedPhoto = () => deletions++;
-    openCamera = async () => cameraStarts++;
-    startShooting = () => shots++;
-    returnToCamera = async () => previewCloses++;`);
-  const press = (key, extra = {}) => document.listeners.get('keydown')({key, preventDefault() {}, ...extra});
-  press('Delete');
-  assert.equal(run('deletions'), 0);
-  press('Enter');
-  assert.equal(run('cameraStarts'), 1);
-  run('busy = true;');
-  press('Enter');
-  run('busy = false; stream = {};');
-  press('Enter');
-  assert.equal(run('cameraStarts'), 1);
-  run("capturePhase = 'review'; selectedPhotoId = 1;");
-  press('Delete');
-  assert.equal(run('deletions'), 1);
-  press('Delete', {repeat: true});
-  press('Backspace');
-  assert.equal(run('deletions'), 2);
-  press('?');
-  assert.equal(elements.get('#shortcut-help').open, true);
-  press('Delete'); press('Enter'); press(' ');
-  assert.equal(run('deletions'), 2);
-  assert.equal(run('shots'), 0);
-  assert.equal(run('cameraStarts'), 1);
-  press('Escape');
-  assert.equal(elements.get('#shortcut-help').open, false);
-  assert.equal(run('previewCloses'), 0);
-  press('?'); press('?');
-  assert.equal(elements.get('#shortcut-help').open, false);
-});
-
-test('deletion selects the newer neighbor, falls back to the older neighbor, and returns to the camera for the last photo', async () => {
-  const { run, elements, activeUrls } = setup();
-  try {
-    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(2))');
-    await run('deleteSelectedPhoto()');
-    assert.equal(run('selectedPhotoId'), 3);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(run('photos.get(2)'), undefined);
-    await run('deleteSelectedPhoto()');
-    assert.equal(run('selectedPhotoId'), 1);
-    await run('deleteSelectedPhoto()');
-    assert.equal(run('selectedPhotoId'), null);
-    assert.equal(run('capturePhase'), 'live');
-    assert.equal(elements.get('#photo-review').hidden, true);
-    assert.equal(activeUrls.size, 3); // Every deleted thumbnail is retained for undo until the next successful capture.
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
-});
-
-test('deletion keeps the displayed image, position and gallery stable until its neighbor is ready', async () => {
-  const { run, elements, activeUrls } = setup();
-  try {
-    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(2))');
-    const image = run('capturedPhoto');
-    const thumbnails = elements.get('#gallery-list').children;
-    run(`var finishDecode;
-      var originalCreate = document.createElement;
-      document.createElement = tag => {
-        const image = originalCreate(tag);
-        if (tag === 'img') image.decode = function () {
-          return this.id === 'captured-photo' ? new Promise(resolve => { finishDecode = resolve; }) : Promise.resolve();
-        };
-        return image;
-      };`);
-    const deleting = run('deleteSelectedPhoto()');
-    assert.equal(run('capturedPhoto'), image);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
-    assert.equal(elements.get('#photo-position').hidden, false);
-    assert.equal(elements.get('#photo-count').hidden, true);
-    assert.equal(elements.get('#gallery-list').children, thumbnails);
-    run('finishDecode()');
-    await deleting;
-    assert.equal(run('selectedPhotoId'), 3);
-    assert.equal(elements.get('#photo-position').textContent, '2 / 2');
-    assert.equal(elements.get('#gallery-list').children.length, 2);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
-});
-
-for (const modifiers of [{}, { metaKey: true }, { ctrlKey: true }]) {
-test(`undo via keyboard ${JSON.stringify(modifiers)} restores and selects the deleted photo and scrolls its thumbnail into view`, async () => {
-  const { run, elements, document, activeUrls } = setup();
-  try {
-    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(2))');
-    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
-    let selected = elements.get('#gallery-list').children.find(button => button['aria-pressed'] === 'true');
-    assert.equal(selected.dataset.photoId, '2');
-    assert.equal(selected.scrollOptions.inline, 'nearest');
-    assert.equal(selected.scrollOptions.block, 'nearest');
-    await run('deleteSelectedPhoto()');
-    assert.equal(elements.get('#photo-position').textContent, '2 / 2');
-    assert.equal(elements.get('#undo-delete').hidden, false);
-    assert.equal(elements.get('#undo-delete').disabled, false);
-    run('var undoAttempt; var originalUndo = undoDelete; undoDelete = () => undoAttempt = originalUndo();');
-    const press = extra => document.listeners.get('keydown')({ key: 'z', ...modifiers, preventDefault() {}, ...extra });
-    press({repeat: true});
-    press({target: {closest: () => ({})}});
-    press({shiftKey: true});
-    press({altKey: true});
-    assert.equal(run('undoAttempt'), undefined);
-    press({});
-    await run('undoAttempt');
-    assert.equal(run('selectedPhotoId'), 2);
-    assert.equal(elements.get('#photo-position').textContent, '2 / 3');
-    assert.equal(run('photos.canUndo'), false);
-    assert.equal(elements.get('#undo-delete').hidden, true);
-    assert.deepEqual(elements.get('#gallery-list').children.map(button => button.dataset.photoId), ['3', '2', '1']);
-    selected = elements.get('#gallery-list').children.find(button => button['aria-pressed'] === 'true');
-    assert.equal(selected.scrollOptions.inline, 'nearest');
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
-});
-
+  await flush();
+  return {...app, context, document, window, mediaDevices, el, change, press, advance, addPhoto, redraw,
+    returning, preview, close, load, activeUrls, animations, pending, encodings, requests, tracks, makeStream, storage, motion, timers};
 }
 
-test('photo position numbers run from oldest to newest and disappear when the preview closes', async () => {
-  const { run, elements } = setup();
+const savedKey = 'photo-booth.settings.v1';
+const ids = f => f.el('#gallery-list').children.map(button => Number(button.dataset.photoId));
+
+// Assertions use controller operations, read-only snapshots, and the rendered DOM.
+test('camera selection lists video inputs, switches devices, and restores the original stream on failure', async () => {
+  const f = await setup();
   try {
-    run(`reducedMotion.matches = true;
-      for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(1))');
-    assert.equal(elements.get('#photo-position').textContent, '1 / 3');
-    assert.equal(elements.get('#photo-count').hidden, true);
-    await run('showPhoto(photos.get(3))');
-    assert.equal(elements.get('#photo-position').textContent, '3 / 3');
-    await run('returnToCamera()');
-    assert.equal(elements.get('#photo-position').hidden, true);
-    assert.equal(elements.get('#photo-position').textContent, '');
-    assert.equal(elements.get('#photo-count').hidden, false);
-    assert.equal(elements.get('#photo-count').textContent, '3');
-  } finally {
-    run('clearPhoto(); photos.clear();');
+    assert.deepEqual(f.el('#camera-select').children.map(option => option.value), ['', 'built-in', 'usb']);
+    await f.camera.openCamera();
+    const first = f.camera.getState().stream;
+    assert.equal(f.requests[0].audio, false);
+    await f.change('#camera-select', 'usb');
+    assert.equal(f.tracks[0].stopped, true);
+    const active = f.camera.getState().stream;
+    f.mediaDevices.getUserMedia = async () => { throw new DOMException('', 'NotReadableError'); };
+    await f.change('#camera-select', 'built-in');
+    assert.equal(f.camera.getState().stream, active);
+    assert.equal(f.el('#camera').srcObject, active);
+    assert.notEqual(active, first);
+    assert.match(f.el('#status').textContent, /元のカメラ/);
+  } finally { await f.close(); }
+});
+
+test('camera changes during capture wait for return completion and apply only the latest choice', async () => {
+  const f = await setup({deferPng: true});
+  try {
+    await f.camera.openCamera();
+    const capturing = f.capture.capturePhoto();
+    await f.change('#camera-select', 'usb');
+    await f.change('#camera-select', 'built-in');
+    assert.equal(f.requests.length, 1);
+    f.pending[0].callback(new Blob(['png'])); await capturing;
+    assert.equal(f.capture.getState().capturePhase, 'returning');
+    assert.equal(f.requests.length, 1);
+    f.returning()[0].animationCalls[0].finish(); await flush();
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].video.deviceId.exact, 'built-in');
+    assert.equal(f.capture.getState().capturePhase, 'live');
+  } finally { await f.close(); }
+});
+
+test('saved camera preferences survive hidden devices and reset after an unavailable device is identified', async () => {
+  const f = await setup({storage: new Map([[savedKey, JSON.stringify({cameraId: 'usb'})]])});
+  try {
+    f.mediaDevices.enumerateDevices = async () => [];
+    await f.camera.updateCameraList();
+    assert.equal(f.camera.getState().preferredCameraId, 'usb');
+    f.mediaDevices.enumerateDevices = async () => [{kind: 'videoinput', deviceId: 'built-in', label: '内蔵'}];
+    await f.camera.updateCameraList();
+    assert.equal(f.camera.getState().preferredCameraId, '');
+    assert.equal(JSON.parse(f.storage.get(savedKey)).cameraId, '');
+  } finally { await f.close(); }
+});
+
+test('a missing saved camera falls back to automatic and persists the camera actually used', async () => {
+  const f = await setup({storage: new Map([[savedKey, JSON.stringify({cameraId: 'usb'})]])});
+  try {
+    f.mediaDevices.getUserMedia = async options => {
+      f.requests.push(options);
+      if (options.video.deviceId) throw new DOMException('', 'NotFoundError');
+      return f.makeStream('built-in');
+    };
+    await f.camera.openCamera();
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].video.deviceId, undefined);
+    assert.equal(JSON.parse(f.storage.get(savedKey)).cameraId, 'built-in');
+  } finally { await f.close(); }
+});
+
+test('resolution rollback and timer preferences persist without replacing the photo preview', async () => {
+  const f = await setup({storage: new Map([[savedKey, JSON.stringify({timer: '5', resolution: '1080'})]])});
+  try {
+    await f.camera.openCamera();
+    await f.capture.showPhoto(f.addPhoto());
+    const image = f.preview();
+    await f.change('#timer', '10');
+    await f.change('#resolution', '720');
+    const track = f.tracks[0], apply = track.applyConstraints;
+    track.applyConstraints = async value => { if (value.height?.exact === 2160) throw new Error('unsupported'); return apply(value); };
+    await f.change('#resolution', '2160');
+    assert.equal(f.camera.getState().appliedResolution, '720');
+    assert.equal(f.el('#resolution').value, '720');
+    assert.equal(f.preview(), image);
+    const reloaded = await setup({storage: f.storage});
+    assert.equal(reloaded.el('#timer').value, '10');
+    assert.equal(reloaded.el('#resolution').value, '720');
+    await reloaded.close();
+  } finally { await f.close(); }
+});
+
+test('rapid resolution changes apply the latest choice while controls remain enabled', async () => {
+  const f = await setup();
+  try {
+    assert.equal(f.el('#resolution').disabled, false);
+    await f.camera.openCamera();
+    await f.capture.showPhoto(f.addPhoto());
+    const image = f.preview(), applied = [], first = deferred();
+    f.tracks[0].applyConstraints = async value => { applied.push(value.height.exact); if (applied.length === 1) await first.promise; };
+    const changing = f.camera.selectResolution('720');
+    await f.change('#resolution', '2160');
+    assert.equal(f.el('#resolution').disabled, false);
+    assert.equal(f.el('#timer').disabled, false);
+    first.resolve(); await changing; await flush();
+    assert.deepEqual(applied, [720, 2160]);
+    assert.equal(f.camera.getState().appliedResolution, '2160');
+    assert.equal(f.preview(), image);
+  } finally { await f.close(); }
+});
+
+test('language respects browser defaults and saved choices, including blocked or invalid storage', async () => {
+  for (const [options, expected] of [
+    [{browserLanguage: 'ja-JP'}, 'ja'], [{browserLanguage: 'en-US'}, 'en'],
+    [{browserLanguage: 'en-US', storage: new Map([[savedKey, JSON.stringify({language: 'ja'})]])}, 'ja'],
+    [{browserLanguage: 'en-US', storage: new Map([[savedKey, 'invalid']])}, 'en'],
+    [{browserLanguage: 'en-US', storageBlocked: true}, 'en'],
+  ]) {
+    const f = await setup(options);
+    assert.equal(f.load('i18n').getLanguage(), expected);
+    await f.close();
   }
 });
 
-test('leaving warns only for unsaved photos and updates after download, deletion, and undo without clearing cancelled navigation', async () => {
-  const { run, context, activeUrls, elements } = setup();
-  const listeners = context.window.listeners;
+test('changing language updates errors and photo metadata without interrupting the preview', async () => {
+  const f = await setup();
   try {
-    assert.equal(listeners.has('beforeunload'), false);
-    run(`for (let i = 0; i < 2; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
-      renderGallery();`);
-    assert.equal(listeners.has('beforeunload'), true);
+    const photo = f.addPhoto(); f.photos.markDownloaded(photo.id);
+    await f.capture.showPhoto(photo);
+    const image = f.preview(), urls = [...f.activeUrls.keys()];
+    f.el('#status').textContent = '写真を表示できませんでした。';
+    f.el('#camera-message').textContent = 'カメラが見つかりません。接続を確認してください。';
+    await f.change('#language', 'en');
+    assert.equal(f.preview(), image);
+    assert.deepEqual([...f.activeUrls.keys()], urls);
+    assert.match(f.el('#status').textContent, /Could not display/);
+    assert.match(f.el('#camera-message').textContent, /No camera/);
+    assert.match(f.el('#gallery-list').children[0]['aria-label'], /downloaded/);
+    assert.equal(JSON.parse(f.storage.get(savedKey)).language, 'en');
+  } finally { await f.close(); }
+});
+
+test('pointer controls release focus while keyboard controls retain it, including help and full screen', async () => {
+  const f = await setup();
+  try {
+    for (const selector of ['#camera-select', '#resolution', '#timer', '#language']) {
+      const node = f.el(selector);
+      node.listeners.get('pointerdown')(); await f.change(selector, node.value);
+      assert.equal(node.blurred, true);
+      node.blurred = false; node.listeners.get('pointerdown')(); node.listeners.get('keydown')();
+      await f.change(selector, node.value); assert.equal(node.blurred, false);
+    }
+    const full = f.el('#fullscreen');
+    full.listeners.get('click')({detail: 1}); await flush(); assert.equal(full.blurred, true);
+    full.blurred = false; full.listeners.get('click')({detail: 0}); await flush(); assert.equal(full.blurred, false);
+    const help = f.el('#shortcut-help'), button = f.el('#show-shortcuts');
+    button.listeners.get('click')({detail: 1}); f.document.activeElement = button; help.close(); assert.equal(button.blurred, true);
+    button.blurred = false; button.listeners.get('click')({detail: 0}); help.close(); assert.equal(button.blurred, false);
+  } finally { await f.close(); }
+});
+
+test('invalid saved settings and denied camera access leave controls usable', async () => {
+  for (const saved of ['invalid', JSON.stringify({timer: '100', resolution: 'bad', cameraId: 42}), 'null']) {
+    const f = await setup({storage: new Map([[savedKey, saved]])});
+    try {
+      assert.equal(f.el('#timer').value, '0'); assert.equal(f.el('#resolution').value, '1080');
+      f.mediaDevices.getUserMedia = async () => { throw new DOMException('', 'NotAllowedError'); };
+      await f.camera.openCamera();
+      assert.equal(f.camera.getState().busy, false);
+      assert.equal(f.camera.getState().status, 'CONNECTION ERROR');
+      assert.match(f.el('#camera-message').textContent, /許可/);
+      await f.change('#timer', '3');
+    } finally { await f.close(); }
+  }
+});
+
+test('new photos appear in the gallery after the return animation and keep a stable count', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera();
+    for (let count = 1; count <= 3; count++) {
+      await f.capture.capturePhoto();
+      assert.equal(f.capture.getState().capturePhase, 'returning');
+      assert.equal(f.el('#photo-count').textContent, String(count));
+      assert.equal(f.el('#gallery-list').children.length, count - 1);
+      const departure = f.returning()[0];
+      assert.notEqual(departure.children[0], f.preview());
+      assert.equal(f.preview().src, departure.children[0].src);
+      assert.equal(departure.animationCalls[0].options.duration, 2000);
+      departure.animationCalls[0].finish(); await flush();
+      assert.equal(f.capture.getState().capturePhase, 'live');
+      assert.equal(f.el('#gallery-list').children.length, count);
+      assert.equal(f.activeUrls.size, count);
+    }
+  } finally { await f.close(); }
+});
+
+test('gallery reserves space once per new photo, and reduced motion skips the reservation animation', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); f.addPhoto(); f.redraw();
+    await f.capture.capturePhoto();
+    const gallery = f.el('#gallery-list'), spacing = gallery.animationCalls.at(-1), count = gallery.animationCalls.length;
+    assert.equal(spacing.options.duration, 300);
+    f.redraw(); assert.equal(gallery.animationCalls.length, count);
+    f.returning()[0].animationCalls[0].finish(); await flush(); assert.equal(spacing.cancelled, true);
+    f.motion.matches = true; await f.capture.capturePhoto();
+    assert.equal(gallery.animationCalls.length, count);
+  } finally { await f.close(); }
+});
+
+test('Space dismisses the capture review while its animation continues, then allows a new capture', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); await f.capture.capturePhoto();
+    const departure = f.returning()[0], animation = departure.animationCalls[0];
+    assert.equal(await f.press(' '), true);
+    assert.equal(f.capture.getState().captureReturnInProgress, false);
+    assert.equal(f.el('#photo-review').hidden, true);
+    assert.equal(animation.cancelled, false);
+    assert.equal(f.photos.list().length, 1);
+    await f.press(' '); assert.equal(f.photos.list().length, 2);
+    animation.finish(); await flush();
+    assert.equal(f.capture.getState().captureReturnInProgress, true);
+    assert.equal(f.el('#photo-review').hidden, false);
+  } finally { await f.close(); }
+});
+
+test('switching photos retains the current preview until decoding succeeds and releases failed or stale loads', async () => {
+  const f = await setup();
+  try {
+    const [first, second, third] = [f.addPhoto('first'), f.addPhoto('second'), f.addPhoto('third')];
+    await f.capture.showPhoto(first); const firstImage = f.preview(), firstUrl = firstImage.src;
+    const loads = [], create = f.document.createElement;
+    f.document.createElement = tag => { const image = create(tag); if (tag === 'img') image.decode = () => { const load = deferred(); loads.push(load); return load.promise; }; return image; };
+    const switching = f.capture.showPhoto(second);
+    assert.equal(f.preview(), firstImage); assert.equal(f.capture.getState().selectedPhotoId, first.id);
+    loads.shift().resolve(); assert.equal(await switching, true);
+    assert.equal(f.capture.getState().selectedPhotoId, second.id); assert.equal(f.activeUrls.has(firstUrl), false);
+    const secondImage = f.preview(); const failed = f.capture.showPhoto(third);
+    loads.shift().reject(new Error('decode failed')); assert.equal(await failed, false);
+    assert.equal(f.preview(), secondImage); assert.equal(f.capture.getState().capturePhase, 'review');
+    const cancelled = f.capture.showPhoto(third); f.camera.stop(); loads.shift().resolve();
+    assert.equal(await cancelled, false); assert.equal(f.capture.getState().selectedPhotoId, null);
+    assert.equal(f.activeUrls.size, 3);
+  } finally { await f.close(); }
+});
+
+for (const seconds of [3, 5, 10]) test(`${seconds}s countdown fires at the deadline exactly once`, async () => {
+  const f = await setup({deferPng: true});
+  try {
+    await f.camera.openCamera(); await f.change('#timer', String(seconds));
+    f.capture.startShooting(); assert.equal(f.el('#countdown').textContent, String(seconds));
+    await f.advance(seconds * 1000 - 1); assert.equal(f.pending.length, 0); assert.equal(f.el('#countdown').textContent, '1');
+    await f.advance(1); assert.equal(f.pending.length, 1); assert.equal(f.el('#countdown').hidden, true);
+    f.capture.startShooting(); await f.advance(1000); assert.equal(f.pending.length, 1);
+    f.pending[0].callback(new Blob(['png'])); await flush();
+  } finally { await f.close(); }
+});
+
+for (const cancel of ['shutter', 'escape', 'visibility', 'disconnect']) test(`countdown cancels on ${cancel} without capturing`, async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); await f.change('#timer', '3'); f.capture.startShooting();
+    if (cancel === 'shutter') f.capture.startShooting();
+    if (cancel === 'escape') await f.press('Escape');
+    if (cancel === 'visibility') { f.document.hidden = true; f.document.listeners.get('visibilitychange')(); }
+    if (cancel === 'disconnect') f.tracks[0].listeners.get('ended')();
+    await f.advance(5000);
+    assert.equal(f.photos.list().length, 0); assert.equal(f.el('#countdown').hidden, true);
+    assert.equal(f.capture.getState().capturePhase, 'live');
+  } finally { await f.close(); }
+});
+
+test('keyboard shortcuts navigate, download, return, and ignore repeats, composing input, modifiers, and form controls', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    await f.camera.openCamera();
+    const [first, second, third] = [f.addPhoto(), f.addPhoto(), f.addPhoto()]; await f.capture.showPhoto(second);
+    await f.press('ArrowLeft'); assert.equal(f.capture.getState().selectedPhotoId, first.id);
+    await f.press('ArrowRight'); assert.equal(f.capture.getState().selectedPhotoId, second.id);
+    await f.press('ArrowRight', {repeat: true}); assert.equal(f.capture.getState().selectedPhotoId, third.id);
+    const selected = f.capture.getState().selectedPhotoId;
+    for (const extra of [{repeat: true}, {isComposing: true}, {altKey: true}, {ctrlKey: true}, {target: f.el('#timer')}]) {
+      assert.equal(await f.press('s', extra), false); assert.equal(f.photos.get(selected).downloadStarted, undefined);
+    }
+    await f.press('s'); assert.equal(f.photos.get(selected).downloadStarted, true);
+    await f.press('f'); assert.equal(f.document.fullscreenElement, f.el('#viewfinder'));
+    await f.press('Escape'); assert.equal(f.capture.getState().selectedPhotoId, selected);
+    await f.press('f'); await f.press('Escape'); assert.equal(f.capture.getState().selectedPhotoId, null);
+    await f.press('ArrowRight'); assert.equal(f.capture.getState().selectedPhotoId, first.id);
+    await f.press(' '); assert.equal(f.capture.getState().capturePhase, 'live');
+    await f.press('ArrowLeft'); assert.equal(f.capture.getState().selectedPhotoId, third.id);
+  } finally { await f.close(); }
+});
+
+test('vertical arrows restore the last viewed photo and fall back to the latest when it is deleted', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    const [first, second, third] = [f.addPhoto(), f.addPhoto(), f.addPhoto()];
+    await f.press('ArrowDown'); assert.equal(f.capture.getState().selectedPhotoId, third.id);
+    await f.press('ArrowUp'); assert.equal(f.capture.getState().selectedPhotoId, null);
+    await f.capture.showPhoto(second); await f.capture.returnToCamera();
+    await f.press('ArrowDown'); assert.equal(f.capture.getState().selectedPhotoId, second.id);
+    await f.press('ArrowUp'); f.photos.remove(second.id);
+    await f.press('ArrowDown'); assert.equal(f.capture.getState().selectedPhotoId, third.id);
+    assert.equal(await f.press('ArrowUp', {target: f.el('#timer')}), false);
+    assert.equal(f.capture.getState().selectedPhotoId, third.id);
+    assert(f.photos.get(first.id));
+  } finally { await f.close(); }
+});
+
+test('Space preserves native activation of buttons and links during review and capture return', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); await f.capture.showPhoto(f.addPhoto());
+    for (const target of [f.document.createElement('button'), f.document.createElement('a')]) {
+      assert.equal(await f.press(' ', {target}), false); assert.equal(f.capture.getState().capturePhase, 'review');
+    }
+    const closing = f.capture.returnToCamera();
+    f.returning()[0].animationCalls[0].finish(); await closing;
+    await f.capture.capturePhoto();
+    for (const target of [f.document.createElement('button'), f.document.createElement('a')]) {
+      assert.equal(await f.press(' ', {target}), false); assert.equal(f.capture.getState().captureReturnInProgress, true);
+    }
+  } finally { await f.close(); }
+});
+
+test('Enter starts an idle camera and the help dialog blocks camera and photo shortcuts', async () => {
+  const f = await setup();
+  try {
+    assert.equal(await f.press('Delete'), false);
+    await f.press('Enter'); assert.equal(f.requests.length, 1);
+    await f.press('Enter'); assert.equal(f.requests.length, 1);
+    await f.capture.showPhoto(f.addPhoto());
+    await f.press('?'); assert.equal(f.el('#shortcut-help').open, true);
+    await f.press('Delete'); await f.press(' '); await f.press('Enter');
+    assert.equal(f.photos.list().length, 1); assert.equal(f.capture.getState().capturePhase, 'review');
+    await f.press('Escape'); assert.equal(f.el('#shortcut-help').open, false);
+    await f.press('Backspace'); assert.equal(f.photos.list().length, 0);
+    await f.capture.undoDelete(); await f.press('Delete'); assert.equal(f.photos.list().length, 0);
+  } finally { await f.close(); }
+});
+
+test('deletion selects the newer neighbor, then the older neighbor, then returns to the camera', async () => {
+  const f = await setup();
+  try {
+    const [first, second, third] = [f.addPhoto(), f.addPhoto(), f.addPhoto()]; await f.capture.showPhoto(second);
+    await f.capture.deleteSelectedPhoto(); assert.equal(f.capture.getState().selectedPhotoId, third.id);
+    await f.capture.deleteSelectedPhoto(); assert.equal(f.capture.getState().selectedPhotoId, first.id);
+    await f.capture.deleteSelectedPhoto(); assert.equal(f.capture.getState().selectedPhotoId, null);
+    assert.equal(f.capture.getState().capturePhase, 'live'); assert.equal(f.el('#photo-count').textContent, '0');
+  } finally { await f.close(); }
+});
+
+test('deletion preserves the image, gallery and position until the next photo is decoded', async () => {
+  const f = await setup();
+  try {
+    const [first, second] = [f.addPhoto(), f.addPhoto()]; f.addPhoto(); await f.capture.showPhoto(second);
+    const image = f.preview(), buttons = f.el('#gallery-list').children;
+    const create = f.document.createElement, decode = deferred();
+    f.document.createElement = tag => { const image = create(tag); if (tag === 'img') image.decode = () => decode.promise; return image; };
+    const deleting = f.capture.deleteSelectedPhoto();
+    assert.equal(f.preview(), image); assert.equal(f.el('#gallery-list').children, buttons);
+    assert.equal(f.el('#photo-position').textContent, '2 / 3');
+    decode.resolve(); await deleting;
+    assert.equal(f.el('#photo-position').textContent, '2 / 2');
+    assert(f.photos.get(first.id));
+  } finally { await f.close(); }
+});
+
+for (const modifiers of [{}, {metaKey: true}, {ctrlKey: true}]) test(`keyboard undo ${JSON.stringify(modifiers)} restores selection and scrolls it into view`, async () => {
+  const f = await setup();
+  try {
+    f.addPhoto(); const second = f.addPhoto(); f.addPhoto(); await f.capture.showPhoto(second); await f.capture.deleteSelectedPhoto();
+    for (const extra of [{repeat: true}, {shiftKey: true}, {altKey: true}, {target: f.el('#timer')}]) {
+      await f.press('z', {...modifiers, ...extra}); assert.equal(f.photos.get(second.id), undefined);
+    }
+    await f.press('z', modifiers);
+    assert.equal(f.capture.getState().selectedPhotoId, second.id); assert.equal(f.photos.canUndo, false);
+    const selected = f.el('#gallery-list').children.find(button => button['aria-pressed'] === 'true');
+    assert.equal(selected.dataset.photoId, String(second.id)); assert.equal(selected.scrollOptions.inline, 'nearest');
+  } finally { await f.close(); }
+});
+
+test('photo position numbers run from oldest to newest and disappear when review closes', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    const first = f.addPhoto(); f.addPhoto(); const third = f.addPhoto();
+    await f.capture.showPhoto(first); assert.equal(f.el('#photo-position').textContent, '1 / 3');
+    await f.capture.showPhoto(third); assert.equal(f.el('#photo-position').textContent, '3 / 3');
+    await f.capture.returnToCamera(); assert.equal(f.el('#photo-position').hidden, true);
+    assert.equal(f.el('#photo-count').hidden, false); assert.equal(f.el('#photo-count').textContent, '3');
+  } finally { await f.close(); }
+});
+
+test('unsaved warnings track downloads, deletion and undo without losing photos on cancelled navigation', async () => {
+  const f = await setup();
+  try {
+    const first = f.addPhoto(), second = f.addPhoto(); await f.capture.showPhoto(first);
     let prevented = false;
-    const event = { preventDefault() { prevented = true; } };
-    listeners.get('beforeunload')(event);
-    assert.equal(prevented, true);
-    assert.equal(event.returnValue, '');
-    assert.equal(run('photos.list().length'), 2);
-    await run('showPhoto(photos.get(1))');
-    const firstThumbnail = elements.get('#gallery-list').children.find(button => button.dataset.photoId === '1');
-    assert.equal(firstThumbnail.dataset.downloaded, 'false');
-    run('downloadSelectedPhoto()');
-    assert.equal(firstThumbnail.dataset.downloaded, 'true');
-    assert.match(firstThumbnail.title, /^#1 \d{2}:\d{2}:\d{2}$/);
-    assert(firstThumbnail['aria-label'].includes('ダウンロード済み'));
-    assert.equal(listeners.has('beforeunload'), true); // Photo 2 is still unsaved.
-    await run('showPhoto(photos.get(2))');
-    await run('deleteSelectedPhoto()');
-    assert.equal(listeners.has('beforeunload'), false);
-    await run('undoDelete()');
-    assert.equal(listeners.has('beforeunload'), true);
-    run('downloadSelectedPhoto()');
-    assert.equal(listeners.has('beforeunload'), false);
-    await run('deleteSelectedPhoto()');
-    await run('undoDelete()');
-    assert.equal(elements.get('#gallery-list').children.find(button => button.dataset.photoId === '2').dataset.downloaded, 'true');
-    assert.equal(listeners.has('beforeunload'), false); // Restoring a downloaded photo keeps its saved state.
-  } finally {
-    run('resetCamera(); photos.clear(); syncUnloadWarning(); for (const url of downloads.keys()) releaseDownload(url);');
-    assert.equal(activeUrls.size, 0);
-    assert.equal(listeners.has('beforeunload'), false);
-  }
+    f.window.listeners.get('beforeunload')({preventDefault() { prevented = true; }});
+    assert.equal(prevented, true); assert.equal(f.photos.list().length, 2);
+    f.capture.downloadSelectedPhoto(); assert.equal(f.photos.get(first.id).downloadStarted, true);
+    assert.equal(f.window.listeners.has('beforeunload'), true);
+    await f.capture.showPhoto(second); await f.capture.deleteSelectedPhoto();
+    assert.equal(f.window.listeners.has('beforeunload'), false);
+    await f.capture.undoDelete(); assert.equal(f.window.listeners.has('beforeunload'), true);
+    f.capture.downloadSelectedPhoto(); assert.equal(f.window.listeners.has('beforeunload'), false);
+    await f.capture.deleteSelectedPhoto(); await f.capture.undoDelete();
+    assert.equal(f.window.listeners.has('beforeunload'), false);
+  } finally { await f.close(); }
 });
 
-test('100 captures retain thumbnails and undo history while releasing preview and download URLs after deletion', async () => {
-  const { run, activeUrls, encodings, elements } = setup();
-  run(`reducedMotion.matches = true;
-    stream = { getTracks: () => [], getVideoTracks: () => [{ getSettings: () => ({}) }] };
-    setBusy(false);`);
+test('100 captures and deletions release preview, canvas and download resources while retaining undo thumbnails', async () => {
+  const f = await setup({reducedMotion: true});
   try {
+    await f.camera.openCamera();
     for (let count = 1; count <= 100; count++) {
-      await run('capturePhoto()');
-      assert.equal(run('photos.list().length'), count);
-      assert.equal(activeUrls.size, count); // Reduced motion returns immediately and retains only thumbnails.
-      assert.equal(run('photos.list()[0].width'), 1920);
-      assert.equal(run('photos.list()[0].height'), 1080);
-      await run('returnToCamera()');
-      assert.equal(activeUrls.size, count);
-      assert.equal(run('thumbnailImages.size'), count);
-      assert.equal(elements.get('#gallery-list').children.length, count);
-      assert.equal(run('animations.length'), 0);
+      await f.capture.capturePhoto(); assert.equal(f.photos.list().length, count); assert.equal(f.activeUrls.size, count);
+      assert.equal(f.el('#gallery-list').children.length, count);
+      assert.equal(f.photos.list()[0].width, 1920); assert.equal(f.photos.list()[0].height, 1080);
     }
-    for (const { canvas } of encodings) {
-      assert.equal(canvas.width, 0);
-      assert.equal(canvas.height, 0);
-    }
+    for (const canvas of f.encodings) { assert.equal(canvas.width, 0); assert.equal(canvas.height, 0); }
     for (let remaining = 100; remaining > 0; remaining--) {
-      await run('showPhoto(photos.list()[0])');
-      await run(`var downloadUrl = URL.createObjectURL(photos.get(selectedPhotoId).original);
-        downloads.set(downloadUrl, { photoId: selectedPhotoId, timer: setTimeout(() => releaseDownload(downloadUrl), 60000) });
-        deleteSelectedPhoto();`);
-      assert.equal(run('photos.list().length'), remaining - 1);
-      assert.equal(run('thumbnailImages.size'), remaining - 1);
-      assert.equal(run('downloads.size'), 0);
-      assert.equal(activeUrls.size, remaining > 1 ? 101 : 100);
+      await f.capture.showPhoto(f.photos.list()[0]); f.capture.downloadSelectedPhoto(); await f.capture.deleteSelectedPhoto();
+      assert.equal(f.photos.list().length, remaining - 1);
+      assert.equal(f.activeUrls.size, remaining > 1 ? 101 : 100);
+      assert.equal(f.el('#gallery-list').children.length, remaining - 1);
     }
-    assert.equal(elements.get('#gallery-list').children.length, 0);
-    assert.equal(elements.get('#captured-photo').src, undefined);
-  } finally {
-    run('clearPhoto(); photos.clear(); for (const url of downloads.keys()) releaseDownload(url);');
-  }
+  } finally { await f.close(); }
 });
 
-test('deletion and restoration animate for 300ms, preserve thumbnail elements on redraw, and clean up on reset', async () => {
-  const { run, elements, finish } = setup();
+test('deletion and restoration animate for 300ms, reuse thumbnail elements, and cancel on reset', async () => {
+  const f = await setup();
   try {
-    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(2))');
-    const list = elements.get('#gallery-list');
-    const older = list.children.find(button => button.dataset.photoId === '1');
-    older.getBoundingClientRect = () => ({left: list.children.indexOf(older) * 104, top: 600, width: 96, height: 54});
-    await run('deleteSelectedPhoto()');
-    assert.equal(list.children.find(button => button.dataset.photoId === '1'), older);
+    const first = f.addPhoto(), second = f.addPhoto(); f.addPhoto(); await f.capture.showPhoto(second);
+    const gallery = f.el('#gallery-list'), older = gallery.children.find(button => button.dataset.photoId === String(first.id));
+    await f.capture.deleteSelectedPhoto();
+    assert.equal(gallery.children.find(button => button.dataset.photoId === String(first.id)), older);
     assert.equal(older.animationCalls.at(-1).options.duration, 300);
-    assert.equal(older.animationCalls.at(-1).frames[0].transform, 'translateX(104px)');
-    const departing = run('[...galleryAnimations.entries()].find(([, element]) => element !== null)[1]');
-    assert.equal(departing['aria-hidden'], 'true');
-    assert.equal(departing.animationCalls[0].options.duration, 300);
-    assert.equal(departing.animationCalls[0].frames[0].transform, 'scaleX(1)');
-    assert.equal(departing.animationCalls[0].frames[1].transform, 'scaleX(0)');
-    assert.equal(departing.animationCalls[0].frames[1].opacity, 0);
-    let removed = false;
-    departing.remove = () => { removed = true; };
-    finish();
-    await run('Promise.resolve()');
-    assert.equal(removed, true);
-    await run('undoDelete()');
-    const restored = list.children.find(button => button.dataset.photoId === '2');
-    const appearance = restored.animationCalls[0];
-    assert.equal(appearance.options.duration, 300);
-    assert.equal(appearance.frames[0].opacity, 0);
-    assert.equal(appearance.frames[1].opacity, 1);
-    assert.equal(older.animationCalls.at(-1).frames[0].transform, 'translateX(-104px)');
-    run('renderGallery()');
-    assert.equal(list.children.find(button => button.dataset.photoId === '2'), restored);
-    assert.equal(restored.animationCalls.length, 1);
-    const active = run('[...galleryAnimations.keys()]');
-    run('resetCamera()');
-    assert.equal(run('galleryAnimations.size'), 0);
-    for (const animation of active) assert.equal(animation.cancelled, true);
-    run('reducedMotion.matches = true;');
-    await run('showPhoto(photos.get(2))');
-    await run('deleteSelectedPhoto()');
-    await run('undoDelete()');
-    assert.equal(run('galleryAnimations.size'), 0);
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
+    const departing = f.el('.gallery').children[0];
+    assert.equal(departing['aria-hidden'], 'true'); assert.equal(departing.animationCalls[0].options.duration, 300);
+    departing.animationCalls[0].finish(); await flush(); assert.equal(f.el('.gallery').children.length, 0);
+    await f.capture.undoDelete(); const restored = gallery.children.find(button => button.dataset.photoId === String(second.id));
+    assert.equal(restored.animationCalls[0].frames[0].opacity, 0);
+    const count = restored.animationCalls.length; f.redraw(); assert.equal(restored.animationCalls.length, count);
+    const current = f.animations.filter(animation => animation.options.duration === 300 && !animation.settled);
+    f.camera.stop(); await flush(); assert(current.every(animation => animation.cancelled));
+    f.motion.matches = true; await f.capture.showPhoto(second); const before = f.animations.length;
+    await f.capture.deleteSelectedPhoto(); await f.capture.undoDelete(); assert.equal(f.animations.length, before);
+  } finally { await f.close(); }
 });
 
-test('multiple deleted photos can be restored one by one with their order and download state intact', async () => {
-  const { run, elements } = setup();
+test('multiple deletions restore in reverse order with their download state preserved', async () => {
+  const f = await setup();
   try {
-    run(`for (let i = 0; i < 3; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
-      photos.markDownloaded(2);`);
-    await run('showPhoto(photos.get(2))');
-    for (let i = 0; i < 3; i++) await run('deleteSelectedPhoto()');
-    for (const [index, id] of [1, 3, 2].entries()) {
-      await run('undoDelete()');
-      assert.equal(run('selectedPhotoId'), id);
-      assert.equal(elements.get('#gallery-list').children.length, index + 1);
-      assert.equal(elements.get('#undo-delete').hidden, index === 2);
-    }
-    assert.equal(run('photos.list().map(photo => photo.id).join()'), '3,2,1');
-    assert.equal(run('photos.get(2).downloadStarted'), true);
-  } finally {
-    run('resetCamera(); photos.clear();');
-  }
+    const first = f.addPhoto(), second = f.addPhoto(), third = f.addPhoto(); f.photos.markDownloaded(second.id);
+    await f.capture.showPhoto(second);
+    for (let i = 0; i < 3; i++) await f.capture.deleteSelectedPhoto();
+    for (const id of [first.id, third.id, second.id]) { await f.capture.undoDelete(); assert.equal(f.capture.getState().selectedPhotoId, id); }
+    assert.deepEqual(ids(f), [third.id, second.id, first.id]); assert.equal(f.photos.get(second.id).downloadStarted, true);
+  } finally { await f.close(); }
 });
 
-test('cancelled and failed captures preserve all undo history; only successful capture discards it', async () => {
-  const { run, elements, pending, activeUrls } = setup({deferPng: true});
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-    reducedMotion.matches = true;
-    for (let i = 0; i < 2; i++) photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);
-    photos.removeUndoable(1); photos.removeUndoable(2); setBusy(false);`);
-  const deletedUrls = [...activeUrls.keys()];
+test('cancelled and failed captures preserve undo history, while successful capture discards it', async () => {
+  const f = await setup({deferPng: true, reducedMotion: true});
   try {
-    elements.get('#timer').value = '3';
-    run('startShooting(); cancelCountdown();');
-    assert.equal(run('photos.canUndo'), true);
-    assert.deepEqual([...activeUrls.keys()], deletedUrls);
-    const failed = run('capturePhoto()');
-    pending[0].callback(null);
-    await failed;
-    assert.equal(run('photos.canUndo'), true);
-    assert.deepEqual([...activeUrls.keys()], deletedUrls);
-
-    run(`var originalCreateElement = document.createElement;
-      document.createElement = tag => {
-        const element = originalCreateElement(tag);
-        if (tag === 'img') element.decode = () => Promise.reject(new Error('decode failed'));
-        return element;
-      };`);
-    const failedPreview = run('capturePhoto()');
-    pending[1].callback(new Blob(['png']));
-    await failedPreview;
-    assert.equal(run('photos.canUndo'), true);
-    assert.deepEqual([...activeUrls.keys()], deletedUrls);
-    run('document.createElement = originalCreateElement;');
-
-    const successful = run('capturePhoto()');
-    assert.equal(run('photos.canUndo'), true);
-    pending[2].callback(new Blob(['png']));
-    await successful;
-    assert.equal(run('photos.canUndo'), false);
-    assert.equal(run('photos.undoRemove()'), null);
-    assert.equal(elements.get('#undo-delete').hidden, true);
-    assert.equal(activeUrls.size, 1);
-    for (const url of deletedUrls) assert.equal(activeUrls.has(url), false);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
+    await f.camera.openCamera(); const first = f.addPhoto(), second = f.addPhoto();
+    f.photos.removeUndoable(first.id); f.photos.removeUndoable(second.id);
+    await f.change('#timer', '3'); f.capture.startShooting(); f.capture.cancelCountdown(); assert.equal(f.photos.canUndo, true);
+    const failed = f.capture.capturePhoto(); f.pending[0].callback(null); await failed; assert.equal(f.photos.canUndo, true);
+    const create = f.document.createElement;
+    f.document.createElement = tag => { const image = create(tag); if (tag === 'img') image.decode = async () => { throw new Error('decode failed'); }; return image; };
+    const failedPreview = f.capture.capturePhoto(); f.pending[1].callback(new Blob(['png'])); await failedPreview;
+    assert.equal(f.photos.canUndo, true); assert.equal(f.activeUrls.size, 2);
+    f.document.createElement = create;
+    const success = f.capture.capturePhoto(); f.pending[2].callback(new Blob(['png'])); await success;
+    assert.equal(f.photos.canUndo, false); assert.equal(f.activeUrls.size, 1);
+  } finally { await f.close(); }
 });
 
-test('shooting during a return animation preserves the new preview when the old animation finishes', async () => {
-  const { run, elements, pending, completion, activeUrls } = setup({ deferPng: true });
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-    timer.value = '0'; setBusy(false);`);
+test('old return animation completion preserves a new capture and preview', async () => {
+  const f = await setup({deferPng: true});
   try {
-    await run('showPhoto(photos.add(new Blob(["first"]), new Blob(["jpg"]), 1920, 1080))');
-    const returning = run('returnToCamera()');
-    const finishOldAnimation = completion();
-    const departingAnimation = run('[...returningPhotos.values()][0].animation');
-    // Save the old completion callback before the next capture creates a flash.
-    run('var originalCapture = capturePhoto; var nextCapture; capturePhoto = () => nextCapture = originalCapture();');
-    assert.equal(elements.get('#shutter').disabled, false);
-    run('startShooting()');
-    assert.equal(pending.length, 1);
-    pending[0].callback(new Blob(['second'], { type: 'image/png' }));
-    await run('nextCapture');
-    assert.equal(departingAnimation.cancelled, false);
-    assert.equal(run('returningPhotos.size'), 2);
-    const finishNewAnimation = completion();
-    assert.equal(activeUrls.size, 4); // Two thumbnails, the departing image, and the new preview.
-    finishOldAnimation();
-    await returning;
-    assert.equal(run('returningPhotos.size'), 1);
-    assert.equal(activeUrls.size, 3);
-    assert.equal(run('capturePhase'), 'returning');
-    assert.equal(run('captureReturnInProgress'), true);
-    assert.equal(elements.get('#photo-review').hidden, false);
-    assert.equal(run('photos.list().length'), 2);
-    assert.equal(elements.get('#gallery-list').children.length, 1);
-    finishNewAnimation();
-    for (let i = 0; i < 4; i++) await run('Promise.resolve()');
-    assert.equal(run('capturePhase'), 'live');
-    assert.equal(activeUrls.size, 2);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
+    await f.camera.openCamera(); await f.capture.showPhoto(f.addPhoto());
+    const returning = f.capture.returnToCamera(), oldAnimation = f.returning()[0].animationCalls[0];
+    assert.equal(f.capture.getActions().canShoot, true);
+    const capturing = f.capture.capturePhoto(); f.pending[0].callback(new Blob(['new'])); await capturing;
+    assert.equal(f.returning().length, 2); assert.equal(oldAnimation.cancelled, false);
+    oldAnimation.finish(); await returning;
+    assert.equal(f.returning().length, 1); assert.equal(f.capture.getState().captureReturnInProgress, true);
+    assert.equal(f.el('#photo-review').hidden, false); assert.equal(f.activeUrls.size, 3);
+    f.returning()[0].animationCalls[0].finish(); await flush(); assert.equal(f.activeUrls.size, 2);
+  } finally { await f.close(); }
 });
 
-test('closing a preview deselects its thumbnail immediately and allows reopening during the return animation', async () => {
-  const { run, elements, completion, activeUrls } = setup();
+test('closing review deselects immediately and allows reopening before the old animation finishes', async () => {
+  const f = await setup();
   try {
-    run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-      photos.add(new Blob(['png']), new Blob(['jpg']), 1920, 1080);`);
-    await run('showPhoto(photos.get(1))');
-    const returning = run('returnToCamera()');
-    const finishReturn = completion();
-    assert.equal(run('selectedPhotoId'), null);
-    const thumbnail = elements.get('#gallery-list').children[0];
-    assert.equal(thumbnail['aria-pressed'], 'false');
-    assert.equal(thumbnail.disabled, false);
-    await run('showPhoto(photos.get(1))');
-    assert.equal(run('selectedPhotoId'), 1);
-    assert.equal(run('capturePhase'), 'review');
-    assert.equal(run('returningPhotos.size'), 1);
-    finishReturn();
-    await returning;
-    assert.equal(run('selectedPhotoId'), 1);
-    assert.equal(elements.get('#photo-review').hidden, false);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
+    await f.camera.openCamera(); const photo = f.addPhoto(); await f.capture.showPhoto(photo);
+    const returning = f.capture.returnToCamera(), animation = f.returning()[0].animationCalls[0];
+    assert.equal(f.capture.getState().selectedPhotoId, null); assert.equal(f.el('#gallery-list').children[0]['aria-pressed'], 'false');
+    assert.equal(f.el('#gallery-list').children[0].disabled, false);
+    f.el('#gallery-list').children[0].click(); await flush();
+    assert.equal(f.capture.getState().selectedPhotoId, photo.id);
+    animation.finish(); await returning; assert.equal(f.capture.getState().selectedPhotoId, photo.id);
+    assert.equal(f.el('#photo-review').hidden, false);
+  } finally { await f.close(); }
 });
 
-test('overlapping return animations keep the older image in front and finish independently', async () => {
-  const { run, completion, activeUrls } = setup();
-  run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]};
-    timer.value = '0'; setBusy(false);`);
+test('overlapping return animations keep the older image in front and release their resources independently', async () => {
+  const f = await setup();
   try {
-    await run('showPhoto(photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080))');
-    const firstReturn = run('returnToCamera()');
-    const finishFirst = completion();
-    const firstElement = run('[...returningPhotos.keys()][0]');
-    const firstAnimation = run('returningPhotos.get([...returningPhotos.keys()][0]).animation');
-    await run('showPhoto(photos.add(new Blob(["png"]), new Blob(["jpg"]), 1920, 1080))');
-    const secondReturn = run('returnToCamera()');
-    const finishSecond = completion();
-    const secondElement = run('[...returningPhotos.keys()][1]');
-    const secondAnimation = run('returningPhotos.get([...returningPhotos.keys()][1]).animation');
-    assert.equal(run('returningPhotos.size'), 2);
-    assert(Number(firstElement.style.zIndex) > Number(secondElement.style.zIndex));
-    assert.equal(firstAnimation.cancelled, false);
-    assert.equal(secondAnimation.cancelled, false);
-    finishFirst();
-    await firstReturn;
-    assert.equal(run('returningPhotos.size'), 1);
-    assert.equal(run('capturePhase'), 'returning');
-    assert.equal(secondAnimation.cancelled, false);
-    finishSecond();
-    await secondReturn;
-    assert.equal(run('returningPhotos.size'), 0);
-    assert.equal(run('capturePhase'), 'live');
-    assert.equal(activeUrls.size, 2);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
+    await f.camera.openCamera(); await f.capture.showPhoto(f.addPhoto());
+    const firstReturn = f.capture.returnToCamera(), first = f.returning()[0];
+    await f.capture.showPhoto(f.addPhoto()); const secondReturn = f.capture.returnToCamera(), second = f.returning()[1];
+    assert(Number(first.style.zIndex) > Number(second.style.zIndex));
+    first.animationCalls[0].finish(); await firstReturn;
+    assert.equal(f.returning().length, 1); assert.equal(f.capture.getState().capturePhase, 'returning');
+    second.animationCalls[0].finish(); await secondReturn;
+    assert.equal(f.returning().length, 0); assert.equal(f.capture.getState().capturePhase, 'live'); assert.equal(f.activeUrls.size, 2);
+  } finally { await f.close(); }
 });
 
-test('a capture completing after disconnect does not clear a new capture canvas', async () => {
-  const { run, activeUrls, pending } = setup({ deferPng: true });
-  const connect = () => run(`stream = {getTracks: () => [], getVideoTracks: () => [{getSettings: () => ({})}]}; setBusy(false);`);
-  connect();
-  const first = run('capturePhoto()');
-  run('resetCamera()');
-  connect();
-  const second = run('capturePhoto()');
+test('a stale capture after disconnect cannot change the new canvas or append its photo', async () => {
+  const f = await setup({deferPng: true});
   try {
-    pending[0].callback(new Blob(['old'], { type: 'image/png' }));
-    await first;
-    assert.equal(pending[1].canvas.width, 1920);
-    assert.equal(pending[1].canvas.height, 1080);
-    pending[1].callback(new Blob(['new'], { type: 'image/png' }));
-    await second;
-    assert.equal(run('photos.list().length'), 1);
-    assert.equal(run('photos.list()[0].original.size'), 3);
-  } finally {
-    run('resetCamera(); photos.clear();');
-    assert.equal(activeUrls.size, 0);
-  }
+    await f.camera.openCamera(); const first = f.capture.capturePhoto(); f.camera.stop();
+    await f.camera.openCamera(); const second = f.capture.capturePhoto();
+    f.pending[0].callback(new Blob(['old'])); await first;
+    assert.equal(f.pending[1].canvas.width, 1920); assert.equal(f.pending[1].canvas.height, 1080);
+    f.pending[1].callback(new Blob(['new'])); await second;
+    assert.equal(f.photos.list().length, 1); assert.equal(await f.photos.list()[0].original.text(), 'new');
+  } finally { await f.close(); }
+});
+
+test('rendering cannot apply pending camera settings, and DOM disabled flags do not govern capture operations', async () => {
+  const f = await setup({deferPng: true});
+  try {
+    await f.camera.openCamera(); f.el('#shutter').disabled = true;
+    const taking = f.capture.capturePhoto(); assert.equal(f.pending.length, 1);
+    await f.camera.selectCamera('usb');
+    f.view.renderControls(f.camera.getState(), f.capture.getState(), f.capture.getActions(), f.photos.canUndo);
+    await flush(); assert.equal(f.requests.length, 1);
+    f.pending[0].callback(new Blob(['png'])); await taking;
+    const before = f.photos.list().length; f.el('#shutter').disabled = false;
+    await f.capture.capturePhoto(); assert.equal(f.photos.list().length, before); assert.equal(f.pending.length, 1);
+    f.returning()[0].animationCalls[0].finish(); await flush(); assert.equal(f.camera.getState().preferredCameraId, 'usb');
+  } finally { await f.close(); }
+});
+
+test('stale camera connections stop their stream and cannot replace a newer connection', async () => {
+  const f = await setup();
+  try {
+    const pending = deferred(), create = f.mediaDevices.getUserMedia;
+    f.mediaDevices.getUserMedia = () => pending.promise;
+    const first = f.camera.openCamera(); f.camera.stop();
+    f.mediaDevices.getUserMedia = create; await f.camera.openCamera();
+    const current = f.camera.getState().stream, stale = f.makeStream('usb');
+    pending.resolve(stale); await first;
+    assert.equal(stale.getTracks()[0].stopped, true); assert.equal(f.camera.getState().stream, current);
+    assert.equal(f.el('#camera').srcObject, current);
+  } finally { await f.close(); }
+});
+
+test('animation timeout releases the preview when the browser does not finish its timeline', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); await f.capture.capturePhoto();
+    await f.advance(2120); assert.equal(f.returning().length, 0);
+    assert.equal(f.capture.getState().capturePhase, 'live'); assert.equal(f.activeUrls.size, 1);
+  } finally { await f.close(); }
+});
+
+test('persisted pagehide stops the camera while retaining photos, and download URLs expire', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera(); await f.capture.showPhoto(f.addPhoto()); f.capture.downloadSelectedPhoto();
+    assert.equal(f.activeUrls.size, 3); await f.advance(60000); assert.equal(f.activeUrls.size, 2);
+    f.window.listeners.get('pagehide')({persisted: true}); await flush();
+    assert.equal(f.camera.getState().stream, null); assert.equal(f.photos.list().length, 1);
+    assert.equal(f.activeUrls.size, 1);
+  } finally { await f.close(); }
 });
