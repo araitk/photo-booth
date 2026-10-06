@@ -223,10 +223,12 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (actions.galleryLocked) return;
     const list = photos.list();
     let next: Photo | undefined;
-    if (capturePhase === 'review' && selectedPhotoId !== null) {
-      const index = list.findIndex(photo => photo.id === selectedPhotoId);
+    const currentPhotoId = view.getFocusedPhotoId() ?? (capturePhase === 'review' ? selectedPhotoId : null);
+    if (currentPhotoId !== null) {
+      const index = list.findIndex(photo => photo.id === currentPhotoId);
       next = list[index + (event.key === 'ArrowLeft' ? 1 : -1)];
     } else if (list.length > 0 && (capturePhase === 'live' || capturePhase === 'returning')) {
       next = event.key === 'ArrowLeft' ? list[0] : list.at(-1);

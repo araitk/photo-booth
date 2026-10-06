@@ -36,11 +36,12 @@ async function setup({ deferPng = false, storage = new Map(), storageBlocked = f
       setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
       remove() { if (this.parent) { this.parent.children = this.parent.children.filter(child => child !== this); this.parent = undefined; } },
       click() { if (tag === 'a') clickedDownloads.push({ href: this.href, download: this.download }); this.listeners.get('click')?.({ detail: 0 }); },
+      focus() { document.activeElement = this; },
       blur() { this.blurred = true; }, scrollIntoView(options) { this.scrollOptions = options; },
       showModal() { this.open = true; }, close() { this.open = false; this.listeners.get('close')?.(); },
       closest(selector) { return selector.includes(tag) ? this : null; },
       querySelectorAll(selector) { return this.children.filter(child => typeof child === 'object' && (selector === '.thumbnail' ? child.className === 'thumbnail' : true)); },
-      querySelector(selector) { const match = selector.match(/data-photo-id="(\d+)"/); return match ? this.children.find(child => child.dataset?.photoId === match[1]) ?? null : null; },
+      querySelector(selector) { if (selector === '.thumbnail:focus') return this.children.find(child => child === document.activeElement && child.className === 'thumbnail') ?? null; if (selector === '.thumbnail') return this.children.find(child => child.className === 'thumbnail') ?? null; const match = selector.match(/data-photo-id="(\d+)"/); return match ? this.children.find(child => child.dataset?.photoId === match[1]) ?? null : null; },
       getBoundingClientRect() { return { left: this.parent?.children.indexOf(this) * 104 || 100, top: 600, width: 96, height: 54 }; },
       async play() {}, async decode() { this.decoded = true; },
       getContext() { return { drawImage() {} }; },
@@ -797,5 +798,31 @@ test('camera disconnection keeps photo actions and keyboard review available', a
     await f.capture.undoDelete();
     assert.equal(f.capture.getState().selectedPhotoId, photo.id);
     assert.equal(f.photos.get(photo.id).downloadStarted, true);
+  } finally { await f.close(); }
+});
+
+
+test('gallery navigation follows focused photos and leaves focus outside the gallery alone', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera();
+    const first = f.addPhoto(), second = f.addPhoto(), third = f.addPhoto();
+    await f.capture.showPhoto(second);
+    const button = id => f.el('#gallery-list').querySelector(`[data-photo-id="${id}"]`);
+    button(second.id).focus();
+    await f.press('ArrowLeft');
+    assert.equal(f.capture.getState().selectedPhotoId, first.id);
+    assert.equal(f.view.getFocusedPhotoId(), first.id);
+    assert.equal(button(first.id).tabIndex, 0);
+    assert.equal(button(second.id).tabIndex, -1);
+    assert.equal(button(third.id).tabIndex, -1);
+    await f.press('ArrowRight');
+    assert.equal(f.capture.getState().selectedPhotoId, second.id);
+    assert.equal(f.view.getFocusedPhotoId(), second.id);
+    f.el('#language').focus();
+    await f.capture.showPhoto(third);
+    assert.equal(f.document.activeElement, f.el('#language'));
+    assert.equal(f.view.getFocusedPhotoId(), null);
+    assert.equal(button(third.id).tabIndex, 0);
   } finally { await f.close(); }
 });

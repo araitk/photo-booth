@@ -57,6 +57,7 @@ export function createView(onSelect: (id: number) => void) {
   const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
   let gallerySpaceAnimation: Animation | null = null;
   let gallerySpacePhotoId: number | null = null;
+  let galleryFocusNeedsTarget = false;
   const galleryAnimations = new Map<Animation, HTMLElement | null>();
 
   function animateGalleryElement(element: HTMLElement, frames: Keyframe[], departing = false) {
@@ -103,8 +104,14 @@ export function createView(onSelect: (id: number) => void) {
     button.title = `#${number} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
 
+  function getFocusedPhotoId(): number | null {
+    const button = galleryList.querySelector<HTMLButtonElement>('.thumbnail:focus');
+    return button ? Number(button.dataset.photoId) : null;
+  }
+
   function renderGallery(allPhotos: Photo[], selectedPhotoId: number | null, pendingPhotoId: number | null, galleryLocked: boolean, change: GalleryChange | null = null) {
     const previousButtons = new Map(Array.from(galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail'), button => [Number(button.dataset.photoId), button]));
+    const focusedPhotoId = getFocusedPhotoId();
     const previousRects = new Map<number, DOMRect>();
     if (change && !reducedMotion.matches) {
       for (const [id, button] of previousButtons) previousRects.set(id, button.getBoundingClientRect());
@@ -121,10 +128,15 @@ export function createView(onSelect: (id: number) => void) {
     }
     const scroll = galleryList.scrollLeft;
     for (const [id, button] of previousButtons) {
-      if (!photoIds.has(id) || id === pendingPhotoId) button.remove();
+      if (!photoIds.has(id) || id === pendingPhotoId) {
+        if (document.activeElement === button) galleryFocusNeedsTarget = true;
+        button.remove();
+      }
     }
     const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
     const hasPendingPhoto = pendingPhotoId !== null && photoIds.has(pendingPhotoId);
+    const tabStopId = list.find(photo => photo.id === selectedPhotoId)?.id
+      ?? list.find(photo => photo.id === focusedPhotoId)?.id ?? list[0]?.id;
     galleryList.classList.toggle('has-pending-photo', hasPendingPhoto);
     if (gallerySpacePhotoId !== (hasPendingPhoto ? pendingPhotoId : null)) {
       gallerySpaceAnimation?.cancel();
@@ -152,6 +164,7 @@ export function createView(onSelect: (id: number) => void) {
       button.dataset.photoId = String(photo.id);
       updateThumbnailMetadata(button, photo, allPhotos.length - index);
       button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
+      button.tabIndex = photo.id === tabStopId ? 0 : -1;
       button.setAttribute('aria-disabled', String(galleryLocked));
       if (!existing) {
         button.append(thumbnailImage(photo));
@@ -168,6 +181,13 @@ export function createView(onSelect: (id: number) => void) {
     }
     galleryList.scrollLeft = scroll;
     selectedThumbnail?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    if (galleryFocusNeedsTarget || (focusedPhotoId !== null && selectedThumbnail)) {
+      const target = selectedThumbnail ?? galleryList.querySelector<HTMLButtonElement>('.thumbnail');
+      if (target) {
+        target.focus({ preventScroll: true });
+        galleryFocusNeedsTarget = false;
+      }
+    }
     if (change && !reducedMotion.matches) {
       for (const button of galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail')) {
         const id = Number(button.dataset.photoId);
@@ -222,6 +242,14 @@ export function createView(onSelect: (id: number) => void) {
     downloadButton.hidden = !reviewing;
     deleteButton.hidden = !reviewing;
     undoButton.hidden = !canUndo;
+    // Wait until controls are visible and enabled after deleting the last photo.
+    if (galleryFocusNeedsTarget && !hasPhotos) {
+      const target = camera.stream ? shutter : startButton;
+      if (!target.disabled) {
+        target.focus({ preventScroll: true });
+        galleryFocusNeedsTarget = false;
+      }
+    }
     // Keep keyboard focus while loading; the selection handler guards locked actions.
     galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.setAttribute('aria-disabled', String(actions.galleryLocked)); });
   }
@@ -485,7 +513,7 @@ export function createView(onSelect: (id: number) => void) {
     updateFullscreen();
   }
 
-  return { elements, renderControls, renderCamera, renderDevices, renderGallery, attachStream,
+  return { elements, renderControls, renderCamera, renderDevices, renderGallery, getFocusedPhotoId, attachStream,
     preparePhoto, showPreparedPhoto, clearPhoto, hidePhoto, renderCountdown, flashCapture,
     returnDestination, returnPhoto, downloadPhoto, releasePhotoDownloads, reset, releaseDownloads,
     detachStream: () => { video.srcObject = null; },

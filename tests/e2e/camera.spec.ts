@@ -67,17 +67,36 @@ test('gallery keyboard selection keeps focus through photo loading and updates',
   await expect(oldest).toHaveAttribute('aria-pressed', 'true');
   await expect(oldest).toBeFocused();
   await oldest.press('ArrowRight');
-  await expect(thumbnails.nth(1)).toHaveAttribute('aria-pressed', 'true');
-  await expect(oldest).toBeFocused();
-  await oldest.press('s');
-  await expect(thumbnails.nth(1)).toHaveAttribute('data-downloaded', 'true');
-  await expect(oldest).toBeFocused();
-  await oldest.press('Delete');
+  const middle = thumbnails.nth(1);
+  await expect(middle).toHaveAttribute('aria-pressed', 'true');
+  await expect(middle).toBeFocused();
+  await expect(page.locator('.thumbnail[tabindex="0"]')).toHaveCount(1);
+  await middle.press('s');
+  await expect(middle).toHaveAttribute('data-downloaded', 'true');
+  await expect(middle).toBeFocused();
+  await page.locator('#download-photo').focus();
+  await expect(middle).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('#download-photo').press('Tab');
+  await expect(page.locator('#delete-photo')).toBeFocused();
+  await page.locator('#delete-photo').press('Tab');
+  await expect(middle).toBeFocused();
+  await middle.press('Tab');
+  await expect(page.locator('.project-footer a')).toBeFocused();
+  await expect(middle).toHaveAttribute('aria-pressed', 'true');
+  await page.locator('.project-footer a').press('Shift+Tab');
+  await expect(middle).toBeFocused();
+  await middle.press('Delete');
   await expect(thumbnails).toHaveCount(2);
-  await expect(oldest).toBeFocused();
-  await oldest.press('z');
+  await expect(thumbnails.first()).toBeFocused();
+  await thumbnails.first().press('z');
   await expect(thumbnails).toHaveCount(3);
-  await expect(oldest).toBeFocused();
+  await expect(thumbnails.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(thumbnails.nth(1)).toBeFocused();
+  await thumbnails.nth(1).press('Escape');
+  await expect(page.locator('#captured-photo')).toBeHidden();
+  await thumbnails.nth(1).press('ArrowLeft');
+  await expect(thumbnails.last()).toHaveAttribute('aria-pressed', 'true');
+  await expect(thumbnails.last()).toBeFocused();
 });
 
 for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
@@ -110,8 +129,10 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     const png = await readFile((await download.path())!);
     expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
     await expect(thumbnails.first()).toHaveAttribute('data-downloaded', 'true');
-    await page.locator('#delete-photo').click();
+    await thumbnails.first().focus();
+    await thumbnails.first().press('Delete');
     await expect(thumbnails).toHaveCount(0);
+    await expect(page.locator('#start-camera')).toBeFocused();
     await expect(page.locator('#start-camera')).toBeVisible();
     await expect(page.locator('#undo-delete')).toBeVisible();
     await page.locator('#undo-delete').click();
@@ -124,3 +145,32 @@ for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 
     await expect(thumbnails).toHaveCount(1);
   });
 }
+
+test('deleting a focused thumbnail moves focus to the selected neighbor then the shutter', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#start-camera').click();
+  const shutter = page.locator('#shutter');
+  const thumbnails = page.locator('.thumbnail');
+  await expect(shutter).toBeEnabled();
+  for (let count = 1; count <= 3; count++) {
+    await shutter.click();
+    await expect(thumbnails).toHaveCount(count);
+    await expect(shutter).toBeEnabled();
+  }
+  await thumbnails.nth(1).focus();
+  await thumbnails.nth(1).press('Enter');
+  await expect(thumbnails.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await thumbnails.nth(1).press('Delete');
+  await expect(thumbnails).toHaveCount(2);
+  await expect(thumbnails.first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(thumbnails.first()).toBeFocused();
+  await thumbnails.first().press('Delete');
+  await expect(thumbnails).toHaveCount(1);
+  await expect(thumbnails.first()).toHaveAttribute('aria-pressed', 'true');
+  await expect(thumbnails.first()).toBeFocused();
+  await thumbnails.first().press('Delete');
+  await expect(thumbnails).toHaveCount(0);
+  await expect(shutter).toBeFocused();
+  await shutter.press('Space');
+  await expect(thumbnails).toHaveCount(1);
+});
