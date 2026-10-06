@@ -17,6 +17,7 @@ interface CameraOptions {
   attachStream: (stream: MediaStream) => Promise<void>;
   canConfigure: () => boolean;
   changed: () => void;
+  settingsChanged: () => void;
   devicesChanged: () => void;
   reset: () => void;
   notice: (message: TranslationMessage | null) => void;
@@ -38,6 +39,7 @@ export function createCameraController(options: CameraOptions) {
   let requestVersion = 0;
   let deviceListVersion = 0;
   let pendingScheduled = false;
+  let lastSettings = { preferredCameraId, resolution };
 
   function getState(): CameraState {
     return { stream, busy, devices: [...devices], cameraId, preferredCameraId, resolution, appliedResolution, status };
@@ -45,6 +47,10 @@ export function createCameraController(options: CameraOptions) {
 
   function changed() {
     options.changed();
+    if (lastSettings.preferredCameraId !== preferredCameraId || lastSettings.resolution !== resolution) {
+      lastSettings = { preferredCameraId, resolution };
+      options.settingsChanged();
+    }
     schedulePendingChanges();
   }
 

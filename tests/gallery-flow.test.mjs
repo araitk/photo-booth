@@ -17,6 +17,7 @@ async function setup({ deferPng = false, storage = new Map(), storageBlocked = f
   const elements = new Map(), activeUrls = new Map(), timers = new Map();
   const animations = [], pending = [], encodings = [], requests = [], tracks = [], clickedDownloads = [];
   const motion = { matches: reducedMotion };
+  const storageWrites = [];
   let nextUrl = 0, nextTimer = 0, now = 0;
   let document;
   function element(tag = 'div') {
@@ -95,7 +96,7 @@ async function setup({ deferPng = false, storage = new Map(), storageBlocked = f
   }
   const context = vm.createContext({ document, window, navigator: {language: browserLanguage, mediaDevices: unsupported ? undefined : mediaDevices},
     localStorage: { getItem(key) { if (storageBlocked) throw new Error('blocked'); return storage.get(key) ?? null; },
-      setItem(key, value) { if (storageBlocked) throw new Error('blocked'); storage.set(key, value); } },
+      setItem(key, value) { if (storageBlocked) throw new Error('blocked'); storage.set(key, value); storageWrites.push({key, value}); } },
     ResizeObserver: class { observe() {} }, Blob, DOMException,
     Date: class extends Date { static now() { return now; } },
     URL: { createObjectURL(blob) { const url = `blob:${++nextUrl}`; activeUrls.set(url, blob); return url; }, revokeObjectURL: url => activeUrls.delete(url) },
@@ -140,7 +141,7 @@ async function setup({ deferPng = false, storage = new Map(), storageBlocked = f
   }
   await flush();
   return {...app, context, document, window, mediaDevices, el, change, press, advance, addPhoto, redraw,
-    returning, preview, close, load, activeUrls, animations, pending, encodings, requests, tracks, makeStream, storage, motion, timers};
+    returning, preview, close, load, activeUrls, animations, pending, encodings, requests, tracks, makeStream, storage, storageWrites, motion, timers};
 }
 
 const savedKey = 'photo-booth.settings.v1';
@@ -739,5 +740,33 @@ test('dynamic messages keep their key and arguments across repeated language cha
     f.view.setNotice(null);
     await f.change('#language', 'en');
     assert.equal(f.el('#status').textContent, '');
+  } finally { await f.close(); }
+});
+
+
+test('only preference changes write settings, while connection and view updates do not', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    assert.equal(f.storageWrites.length, 0);
+    await f.camera.openCamera();
+    const afterOpen = f.storageWrites.length;
+    assert.equal(afterOpen, 1);
+    await f.camera.updateCameraList();
+    f.el('#camera').listeners.get('loadeddata')();
+    f.el('#camera').listeners.get('resize')();
+    await f.capture.showPhoto(f.addPhoto());
+    await f.capture.returnToCamera();
+    f.camera.stop();
+    assert.equal(f.storageWrites.length, afterOpen);
+    await f.change('#timer', '5');
+    await f.change('#language', 'en');
+    await f.camera.selectCamera('usb');
+    await f.camera.selectResolution('720');
+    assert.equal(f.storageWrites.length, afterOpen + 4);
+    await f.camera.selectCamera('usb');
+    await f.camera.selectResolution('720');
+    assert.equal(f.storageWrites.length, afterOpen + 4);
+    assert.equal(JSON.parse(f.storage.get(savedKey)).cameraId, 'usb');
+    assert.equal(JSON.parse(f.storage.get(savedKey)).resolution, '720');
   } finally { await f.close(); }
 });
