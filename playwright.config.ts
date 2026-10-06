@@ -22,8 +22,8 @@ export default defineConfig({
         launchOptions: { args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'] },
       },
     },
-    { name: 'firefox', testIgnore: '**/camera.spec.ts', use: { browserName: 'firefox' } },
-    { name: 'webkit', testIgnore: '**/camera.spec.ts', use: { browserName: 'webkit' } },
+    { name: 'firefox', testIgnore: ['**/camera.spec.ts', '**/memory.spec.ts'], use: { browserName: 'firefox' } },
+    { name: 'webkit', testIgnore: ['**/camera.spec.ts', '**/memory.spec.ts'], use: { browserName: 'webkit' } },
   ],
   webServer: {
     command: 'pnpm build && pnpm exec vite preview --host 127.0.0.1 --port 4175 --strictPort',

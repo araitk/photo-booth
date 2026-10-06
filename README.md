@@ -46,3 +46,14 @@ pnpm test:e2e
 
 撮影テストはChromiumの仮想カメラを使い、実機のカメラにはアクセスしません。
 言語・設定・キーボード操作はChromium・Firefox・WebKitで確認します。
+
+4Kで10枚連続撮影する計測・回帰テストは、次のコマンドで個別に実行できます。
+
+```sh
+pnpm test:e2e --project=chromium tests/e2e/memory.spec.ts
+```
+
+`test-results/`のJSON添付には、生成したPNG・サムネイルのバイト数、
+撮影・削除・次の撮影・ページ離脱後のObject URL数を記録します。
+ブラウザ全体のメモリ使用量ではなく、仮想カメラ画像の圧縮データ量とURL寿命の計測です。
+被写体によりPNGのサイズは変わります。削除写真は次の撮影まで取り消し用に保持します。
