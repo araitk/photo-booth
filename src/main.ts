@@ -1,6 +1,6 @@
 import { PhotoStore, type Photo } from './photo-store';
 import { loadSettings, persistSettings } from './settings';
-import { applyLanguage, getLanguage, initLanguage, translateCurrentText, type Language } from './i18n';
+import { applyLanguage, getLanguage, initLanguage, type Language } from './i18n';
 import { createCameraController } from './camera-controller';
 import { createCaptureController } from './capture-controller';
 import { createView, type GalleryChange } from './view';
@@ -19,7 +19,7 @@ export const view = createView(id => {
   }
 });
 const { video, startButton, resolution, cameraSelect, languageSelect, fullscreenButton,
-  message, status, shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
+  shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
   shortcutHelp, shortcutHelpButton, closeShortcutHelp } = view.elements;
 languageSelect.value = getLanguage();
 if (savedSettings.timer !== undefined) timer.value = savedSettings.timer;
@@ -32,15 +32,15 @@ export const camera = createCameraController({
   changed: () => { render(); saveSettings(); },
   devicesChanged: () => view.renderDevices(camera.getState()),
   reset: () => { view.detachStream(); capture.reset(); },
-  notice: text => { status.textContent = text; },
-  error: text => { message.textContent = text; },
+  notice: view.setNotice,
+  error: view.setCameraMessage,
 });
 export const capture = createCaptureController({
   camera, view, photos, timerSeconds: () => Number(timer.value),
   changed: () => { render(); camera.schedulePendingChanges(); },
   photosChanged: renderGallery,
   unsavedChanged: syncUnloadWarning,
-  notice: text => { status.textContent = text; },
+  notice: view.setNotice,
 });
 
 function render() {
@@ -253,11 +253,8 @@ fullscreenButton.addEventListener('click', event => {
 document.addEventListener('fullscreenchange', view.updateFullscreen);
 languageSelect.addEventListener('change', () => {
   releaseSelectFocus(languageSelect);
-  const currentMessage = message.textContent ?? '';
   applyLanguage(languageSelect.value as Language);
-  status.textContent = translateCurrentText(status.textContent ?? '');
-  message.textContent = translateCurrentText(currentMessage);
-  view.translatePhoto();
+  view.updateLanguage();
   saveSettings();
   render();
   view.updateFullscreen();

@@ -1,6 +1,6 @@
 import { returnKeyframes } from './return-effects';
 import { photoFilename, type Photo } from './photo-store';
-import { t } from './i18n';
+import { t, type TranslationMessage } from './i18n';
 import type { CameraState } from './camera-controller';
 import type { CaptureState, CaptureActions } from './capture-controller';
 
@@ -43,11 +43,13 @@ export function createView(onSelect: (id: number) => void) {
   const closeShortcutHelp = document.querySelector<HTMLButtonElement>('#close-shortcuts')!;
 
   const elements = { video, viewfinder, startButton, resolution, cameraSelect, languageSelect,
-    fullscreenButton, message, status, shutter, timer, photoReview, galleryList,
+    fullscreenButton, shutter, timer, photoReview, galleryList,
     downloadButton, deleteButton, undoButton, shortcutHelp, shortcutHelpButton, closeShortcutHelp };
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const thumbnailImages = new Map<number, HTMLImageElement>();
   const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
+  let notice: TranslationMessage | null = null;
+  let cameraMessage: TranslationMessage = { key: 'カメラの使用を許可すると映像が表示されます。' };
   let previewRatio = 16 / 9;
   let photoUrl: string | null = null;
   let animations: Animation[] = [];
@@ -412,7 +414,21 @@ export function createView(onSelect: (id: number) => void) {
     for (const url of downloads.keys()) releaseDownload(url);
   }
 
-  function translatePhoto() { capturedPhoto.alt = t('撮影した写真'); }
+  function setNotice(next: TranslationMessage | null) {
+    notice = next;
+    status.textContent = notice ? t(notice.key, notice.values) : '';
+  }
+
+  function setCameraMessage(next: TranslationMessage) {
+    cameraMessage = next;
+    message.textContent = t(cameraMessage.key, cameraMessage.values);
+  }
+
+  function updateLanguage() {
+    capturedPhoto.alt = t('撮影した写真');
+    setNotice(notice);
+    setCameraMessage(cameraMessage);
+  }
 
   function setCameraStatus(label: string, live = false) {
     liveBadge.replaceChildren();
@@ -453,7 +469,7 @@ export function createView(onSelect: (id: number) => void) {
       if (document.fullscreenElement) await document.exitFullscreen();
       else await viewfinder.requestFullscreen();
     } catch {
-      status.textContent = t("フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。");
+      setNotice({ key: "フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。" });
     }
     updateFullscreen();
   }
@@ -462,7 +478,7 @@ export function createView(onSelect: (id: number) => void) {
     preparePhoto, showPreparedPhoto, clearPhoto, hidePhoto, renderCountdown, flashCapture,
     returnDestination, returnPhoto, downloadPhoto, releasePhotoDownloads, reset, releaseDownloads,
     detachStream: () => { video.srcObject = null; },
-    clearThumbnails: () => thumbnailImages.clear(), translatePhoto, updateFullscreen, toggleFullscreen,
+    clearThumbnails: () => thumbnailImages.clear(), setNotice, setCameraMessage, updateLanguage, updateFullscreen, toggleFullscreen,
     scrollGalleryToStart: () => { galleryList.scrollLeft = 0; },
     discardPreparedPhoto: (prepared: { url: string }) => URL.revokeObjectURL(prepared.url),
     get reducedMotion() { return reducedMotion.matches; } };

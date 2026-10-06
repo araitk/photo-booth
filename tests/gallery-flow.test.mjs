@@ -271,8 +271,8 @@ test('changing language updates errors and photo metadata without interrupting t
     const photo = f.addPhoto(); f.photos.markDownloaded(photo.id);
     await f.capture.showPhoto(photo);
     const image = f.preview(), urls = [...f.activeUrls.keys()];
-    f.el('#status').textContent = '写真を表示できませんでした。';
-    f.el('#camera-message').textContent = 'カメラが見つかりません。接続を確認してください。';
+    f.view.setNotice({key: '写真を表示できませんでした。'});
+    f.view.setCameraMessage({key: 'カメラが見つかりません。接続を確認してください。'});
     await f.change('#language', 'en');
     assert.equal(f.preview(), image);
     assert.deepEqual([...f.activeUrls.keys()], urls);
@@ -724,5 +724,20 @@ test('persisted pagehide stops the camera while retaining photos, and download U
     f.window.listeners.get('pagehide')({persisted: true}); await flush();
     assert.equal(f.camera.getState().stream, null); assert.equal(f.photos.list().length, 1);
     assert.equal(f.activeUrls.size, 1);
+  } finally { await f.close(); }
+});
+
+
+test('dynamic messages keep their key and arguments across repeated language changes', async () => {
+  const f = await setup();
+  try {
+    f.view.setNotice({key: '写真 {number}', values: {number: 17}});
+    await f.change('#language', 'en');
+    assert.equal(f.el('#status').textContent, 'Photo 17');
+    await f.change('#language', 'ja');
+    assert.equal(f.el('#status').textContent, '写真 17');
+    f.view.setNotice(null);
+    await f.change('#language', 'en');
+    assert.equal(f.el('#status').textContent, '');
   } finally { await f.close(); }
 });

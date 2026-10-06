@@ -67,7 +67,12 @@ const english = {
   "言語": "Language",
 } as const;
 
-type TranslationKey = keyof typeof english;
+export type TranslationKey = keyof typeof english;
+export interface TranslationMessage {
+  key: TranslationKey;
+  values?: Record<string, string | number>;
+}
+
 let language: Language = 'ja';
 
 export function initLanguage(preference?: Language): void {
@@ -79,13 +84,6 @@ export function getLanguage(): Language { return language; }
 export function t(key: TranslationKey, values: Record<string, string | number> = {}): string {
   const text = language === 'ja' ? key : english[key];
   return text.replace(/\{(\w+)\}/g, (match, name) => String(values[name] ?? match));
-}
-
-export function translateCurrentText(text: string): string {
-  for (const key of Object.keys(english) as TranslationKey[]) {
-    if (text === key || text === english[key]) return t(key);
-  }
-  return text;
 }
 
 export function applyLanguage(next: Language = language): void {
