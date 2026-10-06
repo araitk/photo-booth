@@ -34,6 +34,7 @@ export function createView(onSelect: (id: number) => void) {
   const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
   const photoPosition = document.querySelector<HTMLSpanElement>('#photo-position')!;
   const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
+  const shootingControls = document.querySelector<HTMLDivElement>('.shooting-controls')!;
   const previewControls = document.querySelector<HTMLDivElement>('.preview-controls')!;
   const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
   const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
@@ -199,10 +200,12 @@ export function createView(onSelect: (id: number) => void) {
     animations = [];
   }
 
-  function renderControls(camera: CameraState, capture: CaptureState, actions: CaptureActions, canUndo: boolean) {
+  function renderControls(camera: CameraState, capture: CaptureState, actions: CaptureActions, canUndo: boolean, hasPhotos: boolean) {
     viewfinder.classList.toggle('is-returning', capture.capturePhase === 'returning');
     viewfinder.classList.toggle('is-capture-return', capture.captureReturnInProgress);
-    previewControls.hidden = !camera.stream;
+    viewfinder.classList.toggle('has-photo-controls', hasPhotos || canUndo);
+    previewControls.hidden = !camera.stream && !hasPhotos && !canUndo;
+    shutter.hidden = !camera.stream;
     startButton.disabled = camera.busy;
     cameraSelect.disabled = camera.devices.length === 0;
     shutter.disabled = !actions.canShoot;
@@ -214,6 +217,7 @@ export function createView(onSelect: (id: number) => void) {
     deleteButton.disabled = !actions.canDelete;
     undoButton.disabled = !actions.canUndo;
     const reviewing = capture.selectedPhotoId !== null && capture.capturePhase !== 'returning';
+    shootingControls.hidden = !camera.stream && !reviewing;
     photoActions.hidden = !reviewing;
     downloadButton.hidden = !reviewing;
     deleteButton.hidden = !reviewing;

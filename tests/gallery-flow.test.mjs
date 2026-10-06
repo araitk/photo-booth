@@ -686,7 +686,7 @@ test('rendering cannot apply pending camera settings, and DOM disabled flags do 
     await f.camera.openCamera(); f.el('#shutter').disabled = true;
     const taking = f.capture.capturePhoto(); assert.equal(f.pending.length, 1);
     await f.camera.selectCamera('usb');
-    f.view.renderControls(f.camera.getState(), f.capture.getState(), f.capture.getActions(), f.photos.canUndo);
+    f.view.renderControls(f.camera.getState(), f.capture.getState(), f.capture.getActions(), f.photos.canUndo, f.photos.list().length > 0);
     await flush(); assert.equal(f.requests.length, 1);
     f.pending[0].callback(new Blob(['png'])); await taking;
     const before = f.photos.list().length; f.el('#shutter').disabled = false;
@@ -769,5 +769,33 @@ test('only preference changes write settings, while connection and view updates 
     assert.equal(f.storageWrites.length, afterOpen + 4);
     assert.equal(JSON.parse(f.storage.get(savedKey)).cameraId, 'usb');
     assert.equal(JSON.parse(f.storage.get(savedKey)).resolution, '720');
+  } finally { await f.close(); }
+});
+
+test('camera disconnection keeps photo actions and keyboard review available', async () => {
+  const f = await setup();
+  try {
+    assert.equal(f.el('.preview-controls').hidden, true);
+    await f.camera.openCamera();
+    const photo = f.addPhoto();
+    await f.capture.showPhoto(photo);
+    f.tracks[0].listeners.get('ended')(); await flush();
+    assert.equal(f.camera.getState().stream, null);
+    assert.equal(f.el('.preview-controls').hidden, false);
+    assert.equal(f.el('.shooting-controls').hidden, true);
+    assert.equal(f.el('#shutter').hidden, true);
+    assert.equal(f.capture.getActions().canShoot, false);
+    await f.press('ArrowLeft');
+    assert.equal(f.capture.getState().selectedPhotoId, photo.id);
+    assert.equal(f.capture.getActions().canDownload, true);
+    f.capture.downloadSelectedPhoto();
+    assert.equal(f.photos.get(photo.id).downloadStarted, true);
+    await f.capture.deleteSelectedPhoto();
+    assert.equal(f.photos.list().length, 0);
+    assert.equal(f.el('.preview-controls').hidden, false);
+    assert.equal(f.el('#undo-delete').hidden, false);
+    await f.capture.undoDelete();
+    assert.equal(f.capture.getState().selectedPhotoId, photo.id);
+    assert.equal(f.photos.get(photo.id).downloadStarted, true);
   } finally { await f.close(); }
 });

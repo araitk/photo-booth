@@ -79,3 +79,48 @@ test('gallery keyboard selection keeps focus through photo loading and updates',
   await expect(thumbnails).toHaveCount(3);
   await expect(oldest).toBeFocused();
 });
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`photos remain available after camera disconnects at ${viewport.width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    await page.locator('#start-camera').click();
+    const thumbnails = page.locator('.thumbnail');
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await page.locator('#shutter').click();
+    await expect(thumbnails).toHaveCount(1);
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await page.locator('#camera').evaluate((video: HTMLVideoElement) => {
+      const track = (video.srcObject as MediaStream).getVideoTracks()[0];
+      track.stop();
+      // stop() does not emit ended; dispatch the event used for device disconnection.
+      track.dispatchEvent(new Event('ended'));
+    });
+    await expect(page.locator('#camera-message')).toHaveText('カメラとの接続が切れました。もう一度開始してください。');
+    await expect(thumbnails.first()).toBeVisible();
+    await expect(page.locator('#shutter')).toBeHidden();
+    const screenshot = testInfo.outputPath('disconnected.png');
+    await page.screenshot({ path: screenshot });
+    await thumbnails.first().click();
+    await expect(page.locator('#captured-photo')).toBeVisible();
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#download-photo').click();
+    const download = await downloadPromise;
+    const png = await readFile((await download.path())!);
+    expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    await expect(thumbnails.first()).toHaveAttribute('data-downloaded', 'true');
+    await page.locator('#delete-photo').click();
+    await expect(thumbnails).toHaveCount(0);
+    await expect(page.locator('#start-camera')).toBeVisible();
+    await expect(page.locator('#undo-delete')).toBeVisible();
+    await page.locator('#undo-delete').click();
+    await expect(thumbnails).toHaveCount(1);
+    await expect(page.locator('#captured-photo')).toBeVisible();
+    await page.locator('#photo-review').click();
+    await expect(page.locator('#start-camera')).toBeVisible();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(thumbnails).toHaveCount(1);
+  });
+}

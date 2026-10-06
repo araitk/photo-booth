@@ -46,7 +46,7 @@ export const capture = createCaptureController({
 
 function render() {
   view.renderCamera(camera.getState(), capture.getState());
-  view.renderControls(camera.getState(), capture.getState(), capture.getActions(), photos.canUndo);
+  view.renderControls(camera.getState(), capture.getState(), capture.getActions(), photos.canUndo, photos.list().length > 0);
 }
 
 function renderGallery(change?: GalleryChange) {
@@ -228,7 +228,7 @@ document.addEventListener('keydown', event => {
     if (capturePhase === 'review' && selectedPhotoId !== null) {
       const index = list.findIndex(photo => photo.id === selectedPhotoId);
       next = list[index + (event.key === 'ArrowLeft' ? 1 : -1)];
-    } else if (stream && (capturePhase === 'live' || capturePhase === 'returning')) {
+    } else if (list.length > 0 && (capturePhase === 'live' || capturePhase === 'returning')) {
       next = event.key === 'ArrowLeft' ? list[0] : list.at(-1);
     } else {
       return;
