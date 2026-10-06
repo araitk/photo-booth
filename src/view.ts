@@ -114,13 +114,14 @@ export function createView(onSelect: (id: number) => void) {
     photoPosition.textContent = selectedIndex >= 0 ? `${allPhotos.length - selectedIndex} / ${allPhotos.length}` : '';
     if (selectedIndex >= 0) photoPosition.setAttribute('aria-label', t('{total}枚中{number}枚目', { total: allPhotos.length, number: allPhotos.length - selectedIndex }));
     else photoPosition.removeAttribute('aria-label');
+    const photoIds = new Set(allPhotos.map(photo => photo.id));
     for (const id of thumbnailImages.keys()) {
-      if (!allPhotos.some(photo => photo.id === id)) thumbnailImages.delete(id);
+      if (!photoIds.has(id)) thumbnailImages.delete(id);
     }
     const scroll = galleryList.scrollLeft;
     galleryList.replaceChildren();
     const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
-    const hasPendingPhoto = pendingPhotoId !== null && allPhotos.some(photo => photo.id === pendingPhotoId);
+    const hasPendingPhoto = pendingPhotoId !== null && photoIds.has(pendingPhotoId);
     galleryList.classList.toggle('has-pending-photo', hasPendingPhoto);
     if (gallerySpacePhotoId !== (hasPendingPhoto ? pendingPhotoId : null)) {
       gallerySpaceAnimation?.cancel();
