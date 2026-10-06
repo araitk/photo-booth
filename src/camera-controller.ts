@@ -213,10 +213,18 @@ export function createCameraController(options: CameraOptions) {
       appliedResolution = requested;
     } catch {
       if (stream !== activeStream || version !== requestVersion) return;
-      try { await track.applyConstraints(previousConstraints); } catch { /* Show the actual remaining settings below. */ }
+      let restored = true;
+      try { await track.applyConstraints(previousConstraints); } catch { restored = false; }
       if (stream !== activeStream || version !== requestVersion) return;
+      if (!restored) {
+        const actual = track.getSettings();
+        appliedResolution = ['720', '1080', '2160'].find(value =>
+          actual.height === Number(value) && actual.width === Number(value) * 16 / 9) ?? 'auto';
+      }
       if (resolution === requested) resolution = appliedResolution;
-      options.notice({ key: 'この解像度は利用できません。変更前の設定に戻しました。' });
+      options.notice({ key: restored
+        ? 'この解像度は利用できません。変更前の設定に戻しました。'
+        : '変更前の設定に戻せませんでした。現在の解像度で続行します。' });
     } finally {
       applyingResolution = false;
       if (stream === activeStream && version === requestVersion) busy = false;

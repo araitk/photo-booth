@@ -61,6 +61,7 @@ const english = {
   "カメラを切り替えられませんでした。元のカメラを使用します。": "Could not switch cameras. Using the previous camera.",
   "このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。": "Camera access is unavailable. Use a supported browser over HTTPS or localhost.",
   "この解像度は利用できません。変更前の設定に戻しました。": "This resolution is unavailable. Restored the previous settings.",
+  "変更前の設定に戻せませんでした。現在の解像度で続行します。": "Could not restore the previous settings. Continuing with the current resolution.",
   "フルスクリーンを終了": "Exit full screen",
   "このブラウザではフルスクリーンを利用できません": "Full screen is unavailable in this browser",
   "フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。": "Could not toggle full screen. Check your browser settings.",

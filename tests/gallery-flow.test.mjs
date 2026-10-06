@@ -228,6 +228,7 @@ test('resolution rollback and timer preferences persist without replacing the ph
     await f.change('#resolution', '2160');
     assert.equal(f.camera.getState().appliedResolution, '720');
     assert.equal(f.el('#resolution').value, '720');
+    assert.equal(f.el('#status').textContent, 'この解像度は利用できません。変更前の設定に戻しました。');
     assert.equal(f.preview(), image);
     const reloaded = await setup({storage: f.storage});
     assert.equal(reloaded.el('#timer').value, '10');
@@ -826,3 +827,32 @@ test('gallery navigation follows focused photos and leaves focus outside the gal
     assert.equal(button(third.id).tabIndex, 0);
   } finally { await f.close(); }
 });
+
+
+for (const [width, height, resolution] of [[1280, 720, '720'], [640, 480, 'auto']]) {
+  test(`failed resolution restoration reflects the actual ${width} x ${height} stream`, async () => {
+    const f = await setup();
+    try {
+      await f.camera.openCamera();
+      const stream = f.camera.getState().stream;
+      const track = f.tracks[0];
+      let attempts = 0;
+      track.applyConstraints = async () => { attempts++; throw new DOMException('unsupported', 'OverconstrainedError'); };
+      track.getSettings = () => ({ deviceId: 'built-in', width, height, frameRate: 30 });
+      f.el('#camera').videoWidth = width;
+      f.el('#camera').videoHeight = height;
+      await f.change('#resolution', '2160');
+      assert.equal(attempts, 2);
+      assert.equal(f.camera.getState().stream, stream);
+      assert.equal(f.camera.getState().busy, false);
+      assert.equal(f.camera.getState().appliedResolution, resolution);
+      assert.equal(f.el('#resolution').value, resolution);
+      assert.match(f.el('#actual-settings').textContent, new RegExp(`${width} × ${height}`));
+      assert.equal(JSON.parse(f.storage.get(savedKey)).resolution, resolution);
+      assert.equal(f.el('#status').textContent, '変更前の設定に戻せませんでした。現在の解像度で続行します。');
+      assert.equal(f.capture.getActions().canShoot, true);
+      await f.change('#language', 'en');
+      assert.equal(f.el('#status').textContent, 'Could not restore the previous settings. Continuing with the current resolution.');
+    } finally { await f.close(); }
+  });
+}
