@@ -116,7 +116,7 @@ h2 span:not(.gallery-title) { font-size: 10px; background: #24262a; color: #7e82
 .thumbnail[data-downloaded="true"]::after { content: '✓'; position: absolute; right: 4px; bottom: 4px; display: grid; place-items: center; width: 14px; height: 14px; box-sizing: border-box; border: 1px solid #ffffff80; border-radius: 50%; background: #000a; color: #fff; font-size: 10px; line-height: 1; pointer-events: none; }
 .thumbnail img { display: block; width: 100%; height: 100%; object-fit: contain; }
 .thumbnail[aria-pressed="true"] { outline: 1px solid #d7d9df; outline-offset: 1px; }
-.thumbnail:disabled { cursor: default; }
+.thumbnail[aria-disabled="true"] { cursor: default; }
 .gallery-departing { position: absolute; z-index: 1; pointer-events: none; }
 .gallery:has(.gallery-departing) .gallery-empty { visibility: hidden; }
 @media (max-width: 640px) {

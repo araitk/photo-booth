@@ -119,7 +119,9 @@ export function createView(onSelect: (id: number) => void) {
       if (!photoIds.has(id)) thumbnailImages.delete(id);
     }
     const scroll = galleryList.scrollLeft;
-    galleryList.replaceChildren();
+    for (const [id, button] of previousButtons) {
+      if (!photoIds.has(id) || id === pendingPhotoId) button.remove();
+    }
     const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
     const hasPendingPhoto = pendingPhotoId !== null && photoIds.has(pendingPhotoId);
     galleryList.classList.toggle('has-pending-photo', hasPendingPhoto);
@@ -139,6 +141,7 @@ export function createView(onSelect: (id: number) => void) {
     galleryEmpty.hidden = list.length > 0 || hasPendingPhoto;
     galleryList.hidden = list.length === 0 && !hasPendingPhoto;
     let selectedThumbnail: HTMLButtonElement | undefined;
+    let thumbnailIndex = 0;
     for (const [index, photo] of allPhotos.entries()) {
       if (photo.id === pendingPhotoId) continue;
       const existing = previousButtons.get(photo.id);
@@ -148,7 +151,7 @@ export function createView(onSelect: (id: number) => void) {
       button.dataset.photoId = String(photo.id);
       updateThumbnailMetadata(button, photo, allPhotos.length - index);
       button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
-      button.disabled = galleryLocked;
+      button.setAttribute('aria-disabled', String(galleryLocked));
       if (!existing) {
         button.append(thumbnailImage(photo));
         button.addEventListener('click', () => {
@@ -157,7 +160,9 @@ export function createView(onSelect: (id: number) => void) {
       } else {
         thumbnailImage(photo);
       }
-      galleryList.append(button);
+      const current = galleryList.children[thumbnailIndex];
+      if (current !== button) galleryList.insertBefore(button, current ?? null);
+      thumbnailIndex++;
       if (photo.id === selectedPhotoId) selectedThumbnail = button;
     }
     galleryList.scrollLeft = scroll;
@@ -213,7 +218,8 @@ export function createView(onSelect: (id: number) => void) {
     downloadButton.hidden = !reviewing;
     deleteButton.hidden = !reviewing;
     undoButton.hidden = !canUndo;
-    galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = actions.galleryLocked; });
+    // Keep keyboard focus while loading; the selection handler guards locked actions.
+    galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.setAttribute('aria-disabled', String(actions.galleryLocked)); });
   }
 
   function renderCamera(camera: CameraState, capture: CaptureState) {

@@ -32,3 +32,50 @@ test('capture, review, download, deletion and undo work with real media and anim
   await expect(thumbnails.last()).toHaveAttribute('data-downloaded', 'true');
   await expect(page.locator('#captured-photo')).toBeVisible();
 });
+
+test('gallery keyboard selection keeps focus through photo loading and updates', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+  await page.locator('#start-camera').click();
+  const shutter = page.locator('#shutter');
+  const thumbnails = page.locator('.thumbnail');
+  await expect(shutter).toBeEnabled();
+  for (let count = 1; count <= 3; count++) {
+    await shutter.click();
+    await expect(thumbnails).toHaveCount(count);
+    await expect(shutter).toBeEnabled();
+  }
+  await page.evaluate(() => {
+    const decode = HTMLImageElement.prototype.decode;
+    let delayNextPhoto = true;
+    HTMLImageElement.prototype.decode = function () {
+      const decoded = decode.call(this);
+      if (this.id !== 'captured-photo' || !delayNextPhoto) return decoded;
+      delayNextPhoto = false;
+      return Promise.all([decoded, new Promise<void>(resolve => {
+        document.addEventListener('release-photo-decode', () => resolve(), { once: true });
+      })]).then(() => undefined);
+    };
+  });
+  const oldest = thumbnails.last();
+  await oldest.focus();
+  await oldest.press('Enter');
+  await expect(oldest).toHaveAttribute('aria-disabled', 'true');
+  await expect(oldest).toBeFocused();
+  await oldest.press('Enter');
+  await page.evaluate(() => document.dispatchEvent(new Event('release-photo-decode')));
+  await expect(oldest).toHaveAttribute('aria-pressed', 'true');
+  await expect(oldest).toBeFocused();
+  await oldest.press('ArrowRight');
+  await expect(thumbnails.nth(1)).toHaveAttribute('aria-pressed', 'true');
+  await expect(oldest).toBeFocused();
+  await oldest.press('s');
+  await expect(thumbnails.nth(1)).toHaveAttribute('data-downloaded', 'true');
+  await expect(oldest).toBeFocused();
+  await oldest.press('Delete');
+  await expect(thumbnails).toHaveCount(2);
+  await expect(oldest).toBeFocused();
+  await oldest.press('z');
+  await expect(thumbnails).toHaveCount(3);
+  await expect(oldest).toBeFocused();
+});

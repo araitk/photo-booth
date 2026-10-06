@@ -31,6 +31,7 @@ async function setup({ deferPng = false, storage = new Map(), storageBlocked = f
       addEventListener(name, callback) { this.listeners.set(name, callback); },
       replaceChildren(...children) { for (const child of this.children) if (typeof child === 'object') child.parent = undefined; this.children = []; this.append(...children); },
       append(...children) { for (const child of children) { if (typeof child === 'object') { child.remove(); child.parent = this; } this.children.push(child); } },
+      insertBefore(child, reference) { if (child === reference) return child; child.remove(); child.parent = this; const index = reference === null ? this.children.length : this.children.indexOf(reference); this.children.splice(index, 0, child); return child; },
       cloneNode(deep) { const copy = Object.assign(element(tag), { src: this.src, alt: this.alt, id: this.id, className: this.className }); if (deep) copy.append(...this.children.map(child => typeof child === 'object' ? child.cloneNode(true) : child)); return copy; },
       setAttribute(name, value) { this[name] = value; }, removeAttribute(name) { delete this[name]; },
       remove() { if (this.parent) { this.parent.children = this.parent.children.filter(child => child !== this); this.parent = undefined; } },
