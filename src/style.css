@@ -98,7 +98,7 @@ select:disabled { opacity: .5; }
 .shutter:not(:disabled):active span { transform: scale(.94); }
 .camera-details { font-size: 10px; color: #a4a8b0; font-variant-numeric: tabular-nums; background: #17181c9e; border-radius: 4px; padding: 4px 7px; }
 .status-message { flex-shrink: 0; font-size: 11px; color: #c4ad87; text-align: center; line-height: 1.6; margin: 0; }
-.status-message:not(:empty) { margin-bottom: 10px; }
+.status-message:not(:empty) { margin: 12px 0 10px; }
 .gallery { position: relative; width: 100%; max-width: 1000px; flex-shrink: 0; border-top: 1px solid #ffffff1a; padding-top: 10px; }
 .gallery-heading { display: flex; justify-content: space-between; align-items: center; }
 #undo-delete { padding: 0; border: 0; background: transparent; color: #d1d3d8; font-size: 11px; }
