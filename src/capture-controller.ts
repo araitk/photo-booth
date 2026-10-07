@@ -165,8 +165,7 @@ export function createCaptureController(options: CaptureOptions) {
       if (version !== captureVersion || !camera.getState().stream) return;
       const photo = photos.add(blob, thumbnail, width, height);
       options.unsavedChanged();
-      if (!await showPhoto(photo, true)) { photos.remove(photo.id); photosChanged(); }
-      else { photos.clearUndoHistory(); options.changed(); }
+      if (await showPhoto(photo, true)) { photos.clearUndoHistory(); options.changed(); }
     } catch {
       if (version === captureVersion) { clearPhoto(); options.notice({ key: '撮影できませんでした。もう一度お試しください。' }); }
     } finally { captureCanvas.width = 0; captureCanvas.height = 0; }

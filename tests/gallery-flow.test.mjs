@@ -618,13 +618,41 @@ test('cancelled and failed captures preserve undo history, while successful capt
     f.photos.removeUndoable(first.id); f.photos.removeUndoable(second.id);
     await f.change('#timer', '3'); f.capture.startShooting(); f.capture.cancelCountdown(); assert.equal(f.photos.canUndo, true);
     const failed = f.capture.capturePhoto(); f.pending[0].callback(null); await failed; assert.equal(f.photos.canUndo, true);
-    const create = f.document.createElement;
-    f.document.createElement = tag => { const image = create(tag); if (tag === 'img') image.decode = async () => { throw new Error('decode failed'); }; return image; };
-    const failedPreview = f.capture.capturePhoto(); f.pending[1].callback(new Blob(['png'])); await failedPreview;
-    assert.equal(f.photos.canUndo, true); assert.equal(f.activeUrls.size, 2);
-    f.document.createElement = create;
-    const success = f.capture.capturePhoto(); f.pending[2].callback(new Blob(['png'])); await success;
+    const success = f.capture.capturePhoto(); f.pending[1].callback(new Blob(['png'])); await success;
     assert.equal(f.photos.canUndo, false); assert.equal(f.activeUrls.size, 1);
+  } finally { await f.close(); }
+});
+
+test('failed capture preview retains the original, gallery entry and unload warning for retry and download', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    await f.camera.openCamera();
+    const deleted = f.addPhoto(); f.photos.removeUndoable(deleted.id);
+    const create = f.document.createElement;
+    f.document.createElement = tag => {
+      const image = create(tag);
+      if (tag === 'img') image.decode = async () => { throw new Error('decode failed'); };
+      return image;
+    };
+    await f.capture.capturePhoto();
+    const photo = f.photos.list()[0];
+    assert.equal(f.photos.list().length, 1);
+    assert.equal(await photo.original.text(), 'image/png');
+    assert.deepEqual(ids(f), [photo.id]);
+    assert.equal(f.el('#photo-count').textContent, '1');
+    assert.equal(f.capture.getState().capturePhase, 'live');
+    assert.equal(f.capture.getActions().canShoot, true);
+    assert.equal(f.photos.canUndo, true);
+    assert.equal(f.window.listeners.has('beforeunload'), true);
+    assert.equal(f.el('#status').textContent, '写真を表示できませんでした。');
+    assert.equal(f.activeUrls.size, 2);
+    f.document.createElement = create;
+    f.el('#gallery-list').children[0].click(); await flush();
+    assert.equal(f.capture.getState().selectedPhotoId, photo.id);
+    assert.equal(f.el('#photo-review').hidden, false);
+    f.capture.downloadSelectedPhoto();
+    assert.equal(photo.downloadStarted, true);
+    assert.equal(f.window.listeners.has('beforeunload'), false);
   } finally { await f.close(); }
 });
 
