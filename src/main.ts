@@ -167,7 +167,7 @@ document.addEventListener('keydown', event => {
     if (capturePhase === 'countdown') {
       event.preventDefault();
       capture.cancelCountdown();
-    } else if (capturePhase === 'review' && !document.fullscreenElement) {
+    } else if ((capturePhase === 'review' || captureReturnInProgress) && !document.fullscreenElement) {
       event.preventDefault();
       void capture.returnToCamera();
     }
@@ -177,7 +177,7 @@ document.addEventListener('keydown', event => {
     if (target?.closest?.('button, a')) return;
     if (captureReturnInProgress) {
       event.preventDefault();
-      capture.dismissCaptureReview();
+      void capture.returnToCamera();
       return;
     }
     if (!busy && capturePhase === 'review') {
@@ -200,7 +200,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowUp') {
     if (captureReturnInProgress) {
       event.preventDefault();
-      capture.dismissCaptureReview();
+      void capture.returnToCamera();
     } else if (capturePhase === 'review') {
       event.preventDefault();
       void capture.returnToCamera();

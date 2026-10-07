@@ -173,6 +173,12 @@ export function createCaptureController(options: CaptureOptions) {
   }
 
   async function returnToCamera(afterCapture = false) {
+    if (captureReturnInProgress) {
+      captureReturnInProgress = false;
+      view.hidePhoto();
+      options.changed();
+      return;
+    }
     if (capturePhase !== 'review') return;
     const destination = view.returnDestination(selectedPhotoId, pendingPhotoId);
     capturePhase = 'returning';
@@ -185,13 +191,6 @@ export function createCaptureController(options: CaptureOptions) {
     await view.returnPhoto(afterCapture, destination);
     if (version !== captureVersion) return;
     clearPhoto();
-  }
-
-  function dismissCaptureReview() {
-    if (!captureReturnInProgress) return;
-    captureReturnInProgress = false;
-    view.hidePhoto();
-    options.changed();
   }
 
   function downloadSelectedPhoto() {
@@ -239,7 +238,7 @@ export function createCaptureController(options: CaptureOptions) {
   }
 
   return { getState, getActions, startShooting, capturePhoto, cancelCountdown, showPhoto,
-    clearPhoto, returnToCamera, dismissCaptureReview, downloadSelectedPhoto, deleteSelectedPhoto,
+    clearPhoto, returnToCamera, downloadSelectedPhoto, deleteSelectedPhoto,
     undoDelete, reset };
 }
 

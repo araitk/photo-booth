@@ -174,3 +174,21 @@ test('deleting a focused thumbnail moves focus to the selected neighbor then the
   await shutter.press('Space');
   await expect(thumbnails).toHaveCount(1);
 });
+
+test('clicking the capture review restores live shooting before the return animation finishes', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#start-camera').click();
+  const shutter = page.locator('#shutter');
+  const review = page.locator('#photo-review');
+  await expect(shutter).toBeEnabled();
+  await shutter.click();
+  await expect(review).toBeVisible();
+  await expect(page.locator('.returning-photo')).toHaveCount(1);
+  await review.click();
+  await expect(review).toBeHidden();
+  await expect(shutter).toBeVisible();
+  await expect(shutter).toBeEnabled();
+  await expect(page.locator('.returning-photo')).toHaveCount(1);
+  await shutter.click();
+  await expect(page.locator('#photo-count')).toHaveText('2');
+});

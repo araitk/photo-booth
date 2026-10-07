@@ -356,12 +356,13 @@ test('gallery reserves space once per new photo, and reduced motion skips the re
   } finally { await f.close(); }
 });
 
-test('Space dismisses the capture review while its animation continues, then allows a new capture', async () => {
+for (const input of ['Space', 'Escape', 'click']) test(`${input} dismisses the capture review while its animation continues, then allows a new capture`, async () => {
   const f = await setup();
   try {
     await f.camera.openCamera(); await f.capture.capturePhoto();
     const departure = f.returning()[0], animation = departure.animationCalls[0];
-    assert.equal(await f.press(' '), true);
+    if (input !== 'click') assert.equal(await f.press(input === 'Space' ? ' ' : 'Escape'), true);
+    else { f.el('#photo-review').click(); await flush(); }
     assert.equal(f.capture.getState().captureReturnInProgress, false);
     assert.equal(f.el('#photo-review').hidden, true);
     assert.equal(animation.cancelled, false);
