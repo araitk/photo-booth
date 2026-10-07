@@ -1,6 +1,6 @@
 import { returnKeyframes } from './return-effects';
 import { photoFilename, type Photo } from './photo-store';
-import { t } from './i18n';
+import { t, type TranslationMessage } from './i18n';
 import type { CameraState } from './camera-controller';
 import type { CaptureState, CaptureActions } from './capture-controller';
 
@@ -34,6 +34,7 @@ export function createView(onSelect: (id: number) => void) {
   const photoCount = document.querySelector<HTMLSpanElement>('#photo-count')!;
   const photoPosition = document.querySelector<HTMLSpanElement>('#photo-position')!;
   const photoActions = document.querySelector<HTMLDivElement>('#photo-actions')!;
+  const shootingControls = document.querySelector<HTMLDivElement>('.shooting-controls')!;
   const previewControls = document.querySelector<HTMLDivElement>('.preview-controls')!;
   const downloadButton = document.querySelector<HTMLButtonElement>('#download-photo')!;
   const deleteButton = document.querySelector<HTMLButtonElement>('#delete-photo')!;
@@ -43,17 +44,20 @@ export function createView(onSelect: (id: number) => void) {
   const closeShortcutHelp = document.querySelector<HTMLButtonElement>('#close-shortcuts')!;
 
   const elements = { video, viewfinder, startButton, resolution, cameraSelect, languageSelect,
-    fullscreenButton, message, status, shutter, timer, photoReview, galleryList,
+    fullscreenButton, shutter, timer, photoReview, galleryList,
     downloadButton, deleteButton, undoButton, shortcutHelp, shortcutHelpButton, closeShortcutHelp };
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const thumbnailImages = new Map<number, HTMLImageElement>();
   const downloads = new Map<string, { photoId: number; timer: ReturnType<typeof setTimeout> }>();
+  let notice: TranslationMessage | null = null;
+  let cameraMessage: TranslationMessage = { key: 'カメラの使用を許可すると映像が表示されます。' };
   let previewRatio = 16 / 9;
   let photoUrl: string | null = null;
   let animations: Animation[] = [];
   const returningPhotos = new Map<HTMLDivElement, { url: string; animation: Animation | null }>();
   let gallerySpaceAnimation: Animation | null = null;
   let gallerySpacePhotoId: number | null = null;
+  let galleryFocusNeedsTarget = false;
   const galleryAnimations = new Map<Animation, HTMLElement | null>();
 
   function animateGalleryElement(element: HTMLElement, frames: Keyframe[], departing = false) {
@@ -100,8 +104,14 @@ export function createView(onSelect: (id: number) => void) {
     button.title = `#${number} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
   }
 
+  function getFocusedPhotoId(): number | null {
+    const button = galleryList.querySelector<HTMLButtonElement>('.thumbnail:focus');
+    return button ? Number(button.dataset.photoId) : null;
+  }
+
   function renderGallery(allPhotos: Photo[], selectedPhotoId: number | null, pendingPhotoId: number | null, galleryLocked: boolean, change: GalleryChange | null = null) {
     const previousButtons = new Map(Array.from(galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail'), button => [Number(button.dataset.photoId), button]));
+    const focusedPhotoId = getFocusedPhotoId();
     const previousRects = new Map<number, DOMRect>();
     if (change && !reducedMotion.matches) {
       for (const [id, button] of previousButtons) previousRects.set(id, button.getBoundingClientRect());
@@ -112,13 +122,21 @@ export function createView(onSelect: (id: number) => void) {
     photoPosition.textContent = selectedIndex >= 0 ? `${allPhotos.length - selectedIndex} / ${allPhotos.length}` : '';
     if (selectedIndex >= 0) photoPosition.setAttribute('aria-label', t('{total}枚中{number}枚目', { total: allPhotos.length, number: allPhotos.length - selectedIndex }));
     else photoPosition.removeAttribute('aria-label');
+    const photoIds = new Set(allPhotos.map(photo => photo.id));
     for (const id of thumbnailImages.keys()) {
-      if (!allPhotos.some(photo => photo.id === id)) thumbnailImages.delete(id);
+      if (!photoIds.has(id)) thumbnailImages.delete(id);
     }
     const scroll = galleryList.scrollLeft;
-    galleryList.replaceChildren();
+    for (const [id, button] of previousButtons) {
+      if (!photoIds.has(id) || id === pendingPhotoId) {
+        if (document.activeElement === button) galleryFocusNeedsTarget = true;
+        button.remove();
+      }
+    }
     const list = allPhotos.filter(photo => photo.id !== pendingPhotoId);
-    const hasPendingPhoto = pendingPhotoId !== null && allPhotos.some(photo => photo.id === pendingPhotoId);
+    const hasPendingPhoto = pendingPhotoId !== null && photoIds.has(pendingPhotoId);
+    const tabStopId = list.find(photo => photo.id === selectedPhotoId)?.id
+      ?? list.find(photo => photo.id === focusedPhotoId)?.id ?? list[0]?.id;
     galleryList.classList.toggle('has-pending-photo', hasPendingPhoto);
     if (gallerySpacePhotoId !== (hasPendingPhoto ? pendingPhotoId : null)) {
       gallerySpaceAnimation?.cancel();
@@ -136,6 +154,7 @@ export function createView(onSelect: (id: number) => void) {
     galleryEmpty.hidden = list.length > 0 || hasPendingPhoto;
     galleryList.hidden = list.length === 0 && !hasPendingPhoto;
     let selectedThumbnail: HTMLButtonElement | undefined;
+    let thumbnailIndex = 0;
     for (const [index, photo] of allPhotos.entries()) {
       if (photo.id === pendingPhotoId) continue;
       const existing = previousButtons.get(photo.id);
@@ -145,7 +164,8 @@ export function createView(onSelect: (id: number) => void) {
       button.dataset.photoId = String(photo.id);
       updateThumbnailMetadata(button, photo, allPhotos.length - index);
       button.setAttribute('aria-pressed', String(photo.id === selectedPhotoId));
-      button.disabled = galleryLocked;
+      button.tabIndex = photo.id === tabStopId ? 0 : -1;
+      button.setAttribute('aria-disabled', String(galleryLocked));
       if (!existing) {
         button.append(thumbnailImage(photo));
         button.addEventListener('click', () => {
@@ -154,11 +174,20 @@ export function createView(onSelect: (id: number) => void) {
       } else {
         thumbnailImage(photo);
       }
-      galleryList.append(button);
+      const current = galleryList.children[thumbnailIndex];
+      if (current !== button) galleryList.insertBefore(button, current ?? null);
+      thumbnailIndex++;
       if (photo.id === selectedPhotoId) selectedThumbnail = button;
     }
     galleryList.scrollLeft = scroll;
     selectedThumbnail?.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    if (galleryFocusNeedsTarget || (focusedPhotoId !== null && selectedThumbnail)) {
+      const target = selectedThumbnail ?? galleryList.querySelector<HTMLButtonElement>('.thumbnail');
+      if (target) {
+        target.focus({ preventScroll: true });
+        galleryFocusNeedsTarget = false;
+      }
+    }
     if (change && !reducedMotion.matches) {
       for (const button of galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail')) {
         const id = Number(button.dataset.photoId);
@@ -191,10 +220,12 @@ export function createView(onSelect: (id: number) => void) {
     animations = [];
   }
 
-  function renderControls(camera: CameraState, capture: CaptureState, actions: CaptureActions, canUndo: boolean) {
+  function renderControls(camera: CameraState, capture: CaptureState, actions: CaptureActions, canUndo: boolean, hasPhotos: boolean) {
     viewfinder.classList.toggle('is-returning', capture.capturePhase === 'returning');
     viewfinder.classList.toggle('is-capture-return', capture.captureReturnInProgress);
-    previewControls.hidden = !camera.stream;
+    viewfinder.classList.toggle('has-photo-controls', hasPhotos || canUndo);
+    previewControls.hidden = !camera.stream && !hasPhotos && !canUndo;
+    shutter.hidden = !camera.stream;
     startButton.disabled = camera.busy;
     cameraSelect.disabled = camera.devices.length === 0;
     shutter.disabled = !actions.canShoot;
@@ -206,11 +237,21 @@ export function createView(onSelect: (id: number) => void) {
     deleteButton.disabled = !actions.canDelete;
     undoButton.disabled = !actions.canUndo;
     const reviewing = capture.selectedPhotoId !== null && capture.capturePhase !== 'returning';
+    shootingControls.hidden = !camera.stream && !reviewing;
     photoActions.hidden = !reviewing;
     downloadButton.hidden = !reviewing;
     deleteButton.hidden = !reviewing;
     undoButton.hidden = !canUndo;
-    galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.disabled = actions.galleryLocked; });
+    // Wait until controls are visible and enabled after deleting the last photo.
+    if (galleryFocusNeedsTarget && !hasPhotos) {
+      const target = camera.stream ? shutter : startButton;
+      if (!target.disabled) {
+        target.focus({ preventScroll: true });
+        galleryFocusNeedsTarget = false;
+      }
+    }
+    // Keep keyboard focus while loading; the selection handler guards locked actions.
+    galleryList.querySelectorAll<HTMLButtonElement>('.thumbnail').forEach(button => { button.setAttribute('aria-disabled', String(actions.galleryLocked)); });
   }
 
   function renderCamera(camera: CameraState, capture: CaptureState) {
@@ -412,7 +453,21 @@ export function createView(onSelect: (id: number) => void) {
     for (const url of downloads.keys()) releaseDownload(url);
   }
 
-  function translatePhoto() { capturedPhoto.alt = t('撮影した写真'); }
+  function setNotice(next: TranslationMessage | null) {
+    notice = next;
+    status.textContent = notice ? t(notice.key, notice.values) : '';
+  }
+
+  function setCameraMessage(next: TranslationMessage) {
+    cameraMessage = next;
+    message.textContent = t(cameraMessage.key, cameraMessage.values);
+  }
+
+  function updateLanguage() {
+    capturedPhoto.alt = t('撮影した写真');
+    setNotice(notice);
+    setCameraMessage(cameraMessage);
+  }
 
   function setCameraStatus(label: string, live = false) {
     liveBadge.replaceChildren();
@@ -453,16 +508,16 @@ export function createView(onSelect: (id: number) => void) {
       if (document.fullscreenElement) await document.exitFullscreen();
       else await viewfinder.requestFullscreen();
     } catch {
-      status.textContent = t("フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。");
+      setNotice({ key: "フルスクリーンに切り替えられませんでした。ブラウザの設定を確認してください。" });
     }
     updateFullscreen();
   }
 
-  return { elements, renderControls, renderCamera, renderDevices, renderGallery, attachStream,
+  return { elements, renderControls, renderCamera, renderDevices, renderGallery, getFocusedPhotoId, attachStream,
     preparePhoto, showPreparedPhoto, clearPhoto, hidePhoto, renderCountdown, flashCapture,
     returnDestination, returnPhoto, downloadPhoto, releasePhotoDownloads, reset, releaseDownloads,
     detachStream: () => { video.srcObject = null; },
-    clearThumbnails: () => thumbnailImages.clear(), translatePhoto, updateFullscreen, toggleFullscreen,
+    clearThumbnails: () => thumbnailImages.clear(), setNotice, setCameraMessage, updateLanguage, updateFullscreen, toggleFullscreen,
     scrollGalleryToStart: () => { galleryList.scrollLeft = 0; },
     discardPreparedPhoto: (prepared: { url: string }) => URL.revokeObjectURL(prepared.url),
     get reducedMotion() { return reducedMotion.matches; } };

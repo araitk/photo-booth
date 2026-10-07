@@ -79,8 +79,10 @@ test('undo restores multiple deletions in reverse order and releases only discar
   }
 });
 
-test('PNG filenames include a local timestamp without a photo number', () => {
-  assert.equal(photoFilename({ id: 12, createdAt: new Date(2026, 9, 2, 3, 4, 5) }), 'photo-20261002-030405.png');
+test('PNG filenames include local time to hundredths of a second without a photo number', () => {
+  for (const [milliseconds, suffix] of [[0, '00'], [9, '00'], [10, '01'], [123, '12'], [999, '99']]) {
+    assert.equal(photoFilename({ id: 12, createdAt: new Date(2026, 9, 2, 3, 4, 5, milliseconds) }), `photo-20261002-030405-${suffix}.png`);
+  }
 });
 
 test('shrink destination uses the actual thumbnail size and position', () => {

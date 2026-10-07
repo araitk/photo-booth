@@ -68,5 +68,5 @@ export class PhotoStore {
 export function photoFilename(photo: Photo): string {
   const date = photo.createdAt;
   const pad = (value: number) => String(value).padStart(2, '0');
-  return `photo-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.png`;
+  return `photo-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}-${pad(Math.floor(date.getMilliseconds() / 10))}.png`;
 }

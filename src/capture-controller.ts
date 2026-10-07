@@ -1,5 +1,5 @@
 import { type Photo, PhotoStore } from './photo-store';
-import { t } from './i18n';
+import type { TranslationMessage } from './i18n';
 import type { CameraController } from './camera-controller';
 import type { BoothView, GalleryChange } from './view';
 
@@ -27,7 +27,7 @@ interface CaptureOptions {
   changed: () => void;
   photosChanged: (change?: GalleryChange) => void;
   unsavedChanged: () => void;
-  notice: (text: string) => void;
+  notice: (message: TranslationMessage | null) => void;
 }
 
 export function createCaptureController(options: CaptureOptions) {
@@ -99,7 +99,7 @@ export function createCaptureController(options: CaptureOptions) {
       if (version === captureVersion) {
         if (switching) { capturePhase = 'review'; options.changed(); }
         else clearPhoto();
-        options.notice(t('写真を表示できませんでした。'));
+        options.notice({ key: '写真を表示できませんでした。' });
       }
       return false;
     } finally {
@@ -121,7 +121,7 @@ export function createCaptureController(options: CaptureOptions) {
     if (![3, 5, 10].includes(seconds)) return capturePhoto();
     if (capturePhase === 'returning') clearPhoto();
     capturePhase = 'countdown';
-    options.notice('');
+    options.notice(null);
     options.changed();
     const deadline = Date.now() + seconds * 1000;
     const tick = () => {
@@ -141,9 +141,9 @@ export function createCaptureController(options: CaptureOptions) {
     capturePhase = 'capturing';
     options.changed();
     const version = ++captureVersion;
-    options.notice('');
+    options.notice(null);
     const context = captureCanvas.getContext('2d');
-    if (!context) { clearPhoto(); options.notice(t('撮影できませんでした。もう一度お試しください。')); return; }
+    if (!context) { clearPhoto(); options.notice({ key: '撮影できませんでした。もう一度お試しください。' }); return; }
     captureCanvas.width = video.videoWidth;
     captureCanvas.height = video.videoHeight;
     try {
@@ -165,14 +165,19 @@ export function createCaptureController(options: CaptureOptions) {
       if (version !== captureVersion || !camera.getState().stream) return;
       const photo = photos.add(blob, thumbnail, width, height);
       options.unsavedChanged();
-      if (!await showPhoto(photo, true)) { photos.remove(photo.id); photosChanged(); }
-      else { photos.clearUndoHistory(); options.changed(); }
+      if (await showPhoto(photo, true)) { photos.clearUndoHistory(); options.changed(); }
     } catch {
-      if (version === captureVersion) { clearPhoto(); options.notice(t('撮影できませんでした。もう一度お試しください。')); }
+      if (version === captureVersion) { clearPhoto(); options.notice({ key: '撮影できませんでした。もう一度お試しください。' }); }
     } finally { captureCanvas.width = 0; captureCanvas.height = 0; }
   }
 
   async function returnToCamera(afterCapture = false) {
+    if (captureReturnInProgress) {
+      captureReturnInProgress = false;
+      view.hidePhoto();
+      options.changed();
+      return;
+    }
     if (capturePhase !== 'review') return;
     const destination = view.returnDestination(selectedPhotoId, pendingPhotoId);
     capturePhase = 'returning';
@@ -185,13 +190,6 @@ export function createCaptureController(options: CaptureOptions) {
     await view.returnPhoto(afterCapture, destination);
     if (version !== captureVersion) return;
     clearPhoto();
-  }
-
-  function dismissCaptureReview() {
-    if (!captureReturnInProgress) return;
-    captureReturnInProgress = false;
-    view.hidePhoto();
-    options.changed();
   }
 
   function downloadSelectedPhoto() {
@@ -239,7 +237,7 @@ export function createCaptureController(options: CaptureOptions) {
   }
 
   return { getState, getActions, startShooting, capturePhoto, cancelCountdown, showPhoto,
-    clearPhoto, returnToCamera, dismissCaptureReview, downloadSelectedPhoto, deleteSelectedPhoto,
+    clearPhoto, returnToCamera, downloadSelectedPhoto, deleteSelectedPhoto,
     undoDelete, reset };
 }
 

@@ -1,4 +1,4 @@
-import { t } from './i18n';
+import type { TranslationMessage } from './i18n';
 
 export interface CameraState {
   readonly stream: MediaStream | null;
@@ -17,10 +17,11 @@ interface CameraOptions {
   attachStream: (stream: MediaStream) => Promise<void>;
   canConfigure: () => boolean;
   changed: () => void;
+  settingsChanged: () => void;
   devicesChanged: () => void;
   reset: () => void;
-  notice: (text: string) => void;
-  error: (text: string) => void;
+  notice: (message: TranslationMessage | null) => void;
+  error: (message: TranslationMessage) => void;
 }
 
 export function createCameraController(options: CameraOptions) {
@@ -38,6 +39,7 @@ export function createCameraController(options: CameraOptions) {
   let requestVersion = 0;
   let deviceListVersion = 0;
   let pendingScheduled = false;
+  let lastSettings = { preferredCameraId, resolution };
 
   function getState(): CameraState {
     return { stream, busy, devices: [...devices], cameraId, preferredCameraId, resolution, appliedResolution, status };
@@ -45,6 +47,10 @@ export function createCameraController(options: CameraOptions) {
 
   function changed() {
     options.changed();
+    if (lastSettings.preferredCameraId !== preferredCameraId || lastSettings.resolution !== resolution) {
+      lastSettings = { preferredCameraId, resolution };
+      options.settingsChanged();
+    }
     schedulePendingChanges();
   }
 
@@ -96,7 +102,7 @@ export function createCameraController(options: CameraOptions) {
     let nextStream: MediaStream | null = null;
     busy = true;
     status = 'CONNECTING';
-    options.notice('');
+    options.notice(null);
     changed();
     try {
       if (!navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
@@ -125,7 +131,7 @@ export function createCameraController(options: CameraOptions) {
       resolutionChangePending = resolution !== requestedResolution;
       if (!resolutionChangePending && fallback) {
         resolution = 'auto';
-        options.notice(t('カメラが対応する解像度で開始しました。'));
+        options.notice({ key: 'カメラが対応する解像度で開始しました。' });
       }
       preferredCameraId = settings.deviceId || '';
       cameraId = cameraChangePending ?? preferredCameraId;
@@ -135,7 +141,7 @@ export function createCameraController(options: CameraOptions) {
         if (stream !== activeStream) return;
         stop();
         status = 'DISCONNECTED';
-        options.error(t('カメラとの接続が切れました。もう一度開始してください。'));
+        options.error({ key: 'カメラとの接続が切れました。もう一度開始してください。' });
         changed();
         void updateCameraList();
       });
@@ -149,7 +155,7 @@ export function createCameraController(options: CameraOptions) {
           if (version !== requestVersion) return;
           cameraId = cameraChangePending ?? (previousStream.getVideoTracks()[0].getSettings().deviceId || '');
           status = 'LIVE';
-          options.notice(t('カメラを切り替えられませんでした。元のカメラを使用します。'));
+          options.notice({ key: 'カメラを切り替えられませんでした。元のカメラを使用します。' });
           return;
         } catch {
           // If the old camera is no longer available, show the usual connection error.
@@ -158,7 +164,7 @@ export function createCameraController(options: CameraOptions) {
       stop();
       status = 'CONNECTION ERROR';
       options.error(!navigator.mediaDevices?.getUserMedia
-        ? t('このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。') : errorMessage(error));
+        ? { key: 'このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。' } : errorMessage(error));
     } finally {
       if (version === requestVersion) busy = false;
       changed();
@@ -199,7 +205,7 @@ export function createCameraController(options: CameraOptions) {
     resolutionChangePending = false;
     applyingResolution = true;
     busy = true;
-    options.notice('');
+    options.notice(null);
     changed();
     try {
       await track.applyConstraints(constraints(requested, true));
@@ -207,10 +213,18 @@ export function createCameraController(options: CameraOptions) {
       appliedResolution = requested;
     } catch {
       if (stream !== activeStream || version !== requestVersion) return;
-      try { await track.applyConstraints(previousConstraints); } catch { /* Show the actual remaining settings below. */ }
+      let restored = true;
+      try { await track.applyConstraints(previousConstraints); } catch { restored = false; }
       if (stream !== activeStream || version !== requestVersion) return;
+      if (!restored) {
+        const actual = track.getSettings();
+        appliedResolution = ['720', '1080', '2160'].find(value =>
+          actual.height === Number(value) && actual.width === Number(value) * 16 / 9) ?? 'auto';
+      }
       if (resolution === requested) resolution = appliedResolution;
-      options.notice(t('この解像度は利用できません。変更前の設定に戻しました。'));
+      options.notice({ key: restored
+        ? 'この解像度は利用できません。変更前の設定に戻しました。'
+        : '変更前の設定に戻せませんでした。現在の解像度で続行します。' });
     } finally {
       applyingResolution = false;
       if (stream === activeStream && version === requestVersion) busy = false;
@@ -232,14 +246,14 @@ function constraints(value: string, strict = false): MediaTrackConstraints {
   };
 }
 
-function errorMessage(error: unknown): string {
-  if (!(error instanceof DOMException)) return t("カメラを開始できませんでした。もう一度お試しください。");
+function errorMessage(error: unknown): TranslationMessage {
+  if (!(error instanceof DOMException)) return { key: "カメラを開始できませんでした。もう一度お試しください。" };
   switch (error.name) {
-    case 'NotAllowedError': return t("カメラの使用を許可してください。ブラウザのサイト設定から変更できます。");
-    case 'NotFoundError': return t("カメラが見つかりません。接続を確認してください。");
-    case 'NotReadableError': return t("カメラを使用できません。他のアプリで使用中でないか確認してください。");
-    case 'OverconstrainedError': return t("指定した設定を利用できません。別の解像度をお試しください。");
-    default: return t("カメラを開始できませんでした。接続とブラウザの設定を確認してください。");
+    case 'NotAllowedError': return { key: "カメラの使用を許可してください。ブラウザのサイト設定から変更できます。" };
+    case 'NotFoundError': return { key: "カメラが見つかりません。接続を確認してください。" };
+    case 'NotReadableError': return { key: "カメラを使用できません。他のアプリで使用中でないか確認してください。" };
+    case 'OverconstrainedError': return { key: "指定した設定を利用できません。別の解像度をお試しください。" };
+    default: return { key: "カメラを開始できませんでした。接続とブラウザの設定を確認してください。" };
   }
 }
 

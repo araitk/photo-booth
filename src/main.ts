@@ -1,6 +1,6 @@
 import { PhotoStore, type Photo } from './photo-store';
 import { loadSettings, persistSettings } from './settings';
-import { applyLanguage, getLanguage, initLanguage, translateCurrentText, type Language } from './i18n';
+import { applyLanguage, getLanguage, initLanguage, type Language } from './i18n';
 import { createCameraController } from './camera-controller';
 import { createCaptureController } from './capture-controller';
 import { createView, type GalleryChange } from './view';
@@ -19,7 +19,7 @@ export const view = createView(id => {
   }
 });
 const { video, startButton, resolution, cameraSelect, languageSelect, fullscreenButton,
-  message, status, shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
+  shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
   shortcutHelp, shortcutHelpButton, closeShortcutHelp } = view.elements;
 languageSelect.value = getLanguage();
 if (savedSettings.timer !== undefined) timer.value = savedSettings.timer;
@@ -29,23 +29,24 @@ export const camera = createCameraController({
   cameraId: savedSettings.cameraId ?? '', resolution: resolution.value,
   attachStream: view.attachStream,
   canConfigure: () => ['live', 'review'].includes(capture.getState().capturePhase),
-  changed: () => { render(); saveSettings(); },
+  changed: render,
+  settingsChanged: saveSettings,
   devicesChanged: () => view.renderDevices(camera.getState()),
   reset: () => { view.detachStream(); capture.reset(); },
-  notice: text => { status.textContent = text; },
-  error: text => { message.textContent = text; },
+  notice: view.setNotice,
+  error: view.setCameraMessage,
 });
 export const capture = createCaptureController({
   camera, view, photos, timerSeconds: () => Number(timer.value),
   changed: () => { render(); camera.schedulePendingChanges(); },
   photosChanged: renderGallery,
   unsavedChanged: syncUnloadWarning,
-  notice: text => { status.textContent = text; },
+  notice: view.setNotice,
 });
 
 function render() {
   view.renderCamera(camera.getState(), capture.getState());
-  view.renderControls(camera.getState(), capture.getState(), capture.getActions(), photos.canUndo);
+  view.renderControls(camera.getState(), capture.getState(), capture.getActions(), photos.canUndo, photos.list().length > 0);
 }
 
 function renderGallery(change?: GalleryChange) {
@@ -166,7 +167,7 @@ document.addEventListener('keydown', event => {
     if (capturePhase === 'countdown') {
       event.preventDefault();
       capture.cancelCountdown();
-    } else if (capturePhase === 'review' && !document.fullscreenElement) {
+    } else if ((capturePhase === 'review' || captureReturnInProgress) && !document.fullscreenElement) {
       event.preventDefault();
       void capture.returnToCamera();
     }
@@ -176,7 +177,7 @@ document.addEventListener('keydown', event => {
     if (target?.closest?.('button, a')) return;
     if (captureReturnInProgress) {
       event.preventDefault();
-      capture.dismissCaptureReview();
+      void capture.returnToCamera();
       return;
     }
     if (!busy && capturePhase === 'review') {
@@ -199,7 +200,7 @@ document.addEventListener('keydown', event => {
   if (event.key === 'ArrowUp') {
     if (captureReturnInProgress) {
       event.preventDefault();
-      capture.dismissCaptureReview();
+      void capture.returnToCamera();
     } else if (capturePhase === 'review') {
       event.preventDefault();
       void capture.returnToCamera();
@@ -222,12 +223,14 @@ document.addEventListener('keydown', event => {
     return;
   }
   if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    if (actions.galleryLocked) return;
     const list = photos.list();
     let next: Photo | undefined;
-    if (capturePhase === 'review' && selectedPhotoId !== null) {
-      const index = list.findIndex(photo => photo.id === selectedPhotoId);
+    const currentPhotoId = view.getFocusedPhotoId() ?? (capturePhase === 'review' ? selectedPhotoId : null);
+    if (currentPhotoId !== null) {
+      const index = list.findIndex(photo => photo.id === currentPhotoId);
       next = list[index + (event.key === 'ArrowLeft' ? 1 : -1)];
-    } else if (stream && (capturePhase === 'live' || capturePhase === 'returning')) {
+    } else if (list.length > 0 && (capturePhase === 'live' || capturePhase === 'returning')) {
       next = event.key === 'ArrowLeft' ? list[0] : list.at(-1);
     } else {
       return;
@@ -253,11 +256,8 @@ fullscreenButton.addEventListener('click', event => {
 document.addEventListener('fullscreenchange', view.updateFullscreen);
 languageSelect.addEventListener('change', () => {
   releaseSelectFocus(languageSelect);
-  const currentMessage = message.textContent ?? '';
   applyLanguage(languageSelect.value as Language);
-  status.textContent = translateCurrentText(status.textContent ?? '');
-  message.textContent = translateCurrentText(currentMessage);
-  view.translatePhoto();
+  view.updateLanguage();
   saveSettings();
   render();
   view.updateFullscreen();
