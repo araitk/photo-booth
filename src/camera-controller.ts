@@ -26,6 +26,7 @@ interface CameraOptions {
 
 export function createCameraController(options: CameraOptions) {
   let stream: MediaStream | null = null;
+  let connectingStream: MediaStream | null = null;
   let busy = false;
   let devices: MediaDeviceInfo[] = [];
   let cameraId = options.cameraId;
@@ -68,7 +69,13 @@ export function createCameraController(options: CameraOptions) {
   function stop() {
     requestVersion++;
     stream?.getTracks().forEach(track => track.stop());
+    connectingStream?.getTracks().forEach(track => track.stop());
+    connectingStream = null;
     stream = null;
+    if (cameraChangePending !== null) preferredCameraId = cameraChangePending;
+    cameraChangePending = null;
+    resolutionChangePending = false;
+    applyingResolution = false;
     busy = false;
     status = 'OFF';
     options.reset();
@@ -119,9 +126,11 @@ export function createCameraController(options: CameraOptions) {
         nextStream = await navigator.mediaDevices.getUserMedia({ audio: false, video: constraints(requestedResolution) });
       }
       if (version !== requestVersion) { nextStream.getTracks().forEach(track => track.stop()); return; }
+      connectingStream = nextStream;
       await options.attachStream(nextStream);
       if (version !== requestVersion) { nextStream.getTracks().forEach(track => track.stop()); return; }
       stream = nextStream;
+      connectingStream = null;
       previousStream?.getTracks().forEach(track => track.stop());
       status = 'LIVE';
       const settings = stream.getVideoTracks()[0].getSettings();
@@ -166,6 +175,7 @@ export function createCameraController(options: CameraOptions) {
       options.error(!navigator.mediaDevices?.getUserMedia
         ? { key: 'このブラウザではカメラを利用できません。対応ブラウザまたはlocalhostから開いてください。' } : errorMessage(error));
     } finally {
+      if (connectingStream === nextStream) connectingStream = null;
       if (version === requestVersion) busy = false;
       changed();
     }
@@ -226,7 +236,7 @@ export function createCameraController(options: CameraOptions) {
         ? 'この解像度は利用できません。変更前の設定に戻しました。'
         : '変更前の設定に戻せませんでした。現在の解像度で続行します。' });
     } finally {
-      applyingResolution = false;
+      if (version === requestVersion) applyingResolution = false;
       if (stream === activeStream && version === requestVersion) busy = false;
       changed();
     }

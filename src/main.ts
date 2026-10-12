@@ -6,6 +6,8 @@ import { createCaptureController } from './capture-controller';
 import { createView, type GalleryChange } from './view';
 
 const savedSettings = loadSettings();
+let mirrorEnabled = savedSettings.mirror ?? true;
+let gridEnabled = savedSettings.grid ?? true;
 initLanguage(savedSettings.language);
 applyLanguage();
 
@@ -18,8 +20,8 @@ export const view = createView(id => {
     if (photo) void capture.showPhoto(photo);
   }
 });
-const { video, startButton, resolution, cameraSelect, languageSelect, fullscreenButton,
-  shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
+const { video, startButton, closePreviewButton, resolution, cameraSelect, languageSelect, fullscreenButton,
+  mirrorButton, gridButton, shutter, timer, photoReview, downloadButton, deleteButton, undoButton,
   shortcutHelp, shortcutHelpButton, closeShortcutHelp } = view.elements;
 languageSelect.value = getLanguage();
 if (savedSettings.timer !== undefined) timer.value = savedSettings.timer;
@@ -45,6 +47,7 @@ export const capture = createCaptureController({
 });
 
 function render() {
+  view.renderPreviewSettings(mirrorEnabled, gridEnabled);
   view.renderCamera(camera.getState(), capture.getState());
   view.renderControls(camera.getState(), capture.getState(), capture.getActions(), photos.canUndo, photos.list().length > 0);
 }
@@ -57,7 +60,7 @@ function renderGallery(change?: GalleryChange) {
 
 function saveSettings() {
   const state = camera.getState();
-  persistSettings({ timer: timer.value, resolution: state.resolution, cameraId: state.preferredCameraId, language: getLanguage() });
+  persistSettings({ timer: timer.value, resolution: state.resolution, cameraId: state.preferredCameraId, language: getLanguage(), mirror: mirrorEnabled, grid: gridEnabled });
 }
 
 let unloadWarningActive = false;
@@ -89,7 +92,32 @@ function syncUnloadWarning() {
   unloadWarningActive = needed;
 }
 
+mirrorButton.addEventListener('click', event => {
+  mirrorEnabled = !mirrorEnabled;
+  render();
+  saveSettings();
+  if (event.detail > 0) mirrorButton.blur();
+});
+gridButton.addEventListener('click', event => {
+  gridEnabled = !gridEnabled;
+  render();
+  saveSettings();
+  if (event.detail > 0) gridButton.blur();
+});
 startButton.addEventListener('click', () => { void camera.openCamera(); });
+closePreviewButton.addEventListener('click', async event => {
+  if (capture.getActions().canClosePhoto) {
+    if (event.detail > 0) closePreviewButton.blur();
+    await capture.returnToCamera();
+    if (closePreviewButton.hidden) startButton.focus({ preventScroll: true });
+    return;
+  }
+  camera.stop();
+  view.setNotice(null);
+  view.setCameraMessage({ key: 'カメラは停止しています。' });
+  startButton.focus({ preventScroll: true });
+  if (event.detail > 0) startButton.blur();
+});
 cameraSelect.addEventListener('change', async () => {
   releaseSelectFocus(cameraSelect);
   await camera.selectCamera(cameraSelect.value);

@@ -12,6 +12,10 @@ export function createView(onSelect: (id: number) => void) {
   const previewSpace = document.querySelector<HTMLDivElement>('#preview-space')!;
   const mediaSurface = document.querySelector<HTMLDivElement>('#media-surface')!;
   const placeholder = document.querySelector<HTMLDivElement>('#placeholder')!;
+  const mirrorButton = document.querySelector<HTMLButtonElement>('#toggle-mirror')!;
+  const gridButton = document.querySelector<HTMLButtonElement>('#toggle-grid')!;
+  const grid = document.querySelector<HTMLDivElement>('.grid')!;
+  const closePreviewButton = document.querySelector<HTMLButtonElement>('#close-preview')!;
   const startButton = document.querySelector<HTMLButtonElement>('#start-camera')!;
   const resolution = document.querySelector<HTMLSelectElement>('#resolution')!;
   const cameraSelect = document.querySelector<HTMLSelectElement>('#camera-select')!;
@@ -43,8 +47,8 @@ export function createView(onSelect: (id: number) => void) {
   const shortcutHelpButton = document.querySelector<HTMLButtonElement>('#show-shortcuts')!;
   const closeShortcutHelp = document.querySelector<HTMLButtonElement>('#close-shortcuts')!;
 
-  const elements = { video, viewfinder, startButton, resolution, cameraSelect, languageSelect,
-    fullscreenButton, shutter, timer, photoReview, galleryList,
+  const elements = { video, viewfinder, startButton, closePreviewButton, resolution, cameraSelect, languageSelect,
+    fullscreenButton, mirrorButton, gridButton, shutter, timer, photoReview, galleryList,
     downloadButton, deleteButton, undoButton, shortcutHelp, shortcutHelpButton, closeShortcutHelp };
   const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
   const thumbnailImages = new Map<number, HTMLImageElement>();
@@ -220,13 +224,33 @@ export function createView(onSelect: (id: number) => void) {
     animations = [];
   }
 
+  function renderPreviewSettings(mirror: boolean, showGrid: boolean) {
+    video.classList.toggle('is-mirrored', mirror);
+    video.setAttribute('aria-label', t(mirror ? '左右反転したカメラプレビュー' : 'カメラプレビュー'));
+    grid.hidden = !showGrid;
+    mirrorButton.setAttribute('aria-pressed', String(mirror));
+    mirrorButton.setAttribute('aria-label', t('ミラー表示'));
+    mirrorButton.title = t(mirror ? 'ミラー表示をオフ' : 'ミラー表示をオン');
+    gridButton.setAttribute('aria-pressed', String(showGrid));
+    gridButton.setAttribute('aria-label', t('グリッド表示'));
+    gridButton.title = t(showGrid ? 'グリッド表示をオフ' : 'グリッド表示をオン');
+  }
+
   function renderControls(camera: CameraState, capture: CaptureState, actions: CaptureActions, canUndo: boolean, hasPhotos: boolean) {
     viewfinder.classList.toggle('is-returning', capture.capturePhase === 'returning');
     viewfinder.classList.toggle('is-capture-return', capture.captureReturnInProgress);
     viewfinder.classList.toggle('has-photo-controls', hasPhotos || canUndo);
     previewControls.hidden = !camera.stream && !hasPhotos && !canUndo;
     shutter.hidden = !camera.stream;
+    const previewSettingsVisible = Boolean(camera.stream) && camera.status === 'LIVE'
+      && !actions.canClosePhoto && capture.capturePhase !== 'capturing';
+    mirrorButton.hidden = !previewSettingsVisible;
+    gridButton.hidden = !previewSettingsVisible;
     startButton.disabled = camera.busy;
+    closePreviewButton.hidden = !actions.canClosePhoto && !camera.stream && camera.status !== 'CONNECTING';
+    const closeLabel = t(actions.canClosePhoto ? '写真を閉じる' : 'カメラを停止');
+    closePreviewButton.setAttribute('aria-label', closeLabel);
+    closePreviewButton.title = closeLabel;
     cameraSelect.disabled = camera.devices.length === 0;
     shutter.disabled = !actions.canShoot;
     const counting = capture.capturePhase === 'countdown';
@@ -513,7 +537,7 @@ export function createView(onSelect: (id: number) => void) {
     updateFullscreen();
   }
 
-  return { elements, renderControls, renderCamera, renderDevices, renderGallery, getFocusedPhotoId, attachStream,
+  return { elements, renderPreviewSettings, renderControls, renderCamera, renderDevices, renderGallery, getFocusedPhotoId, attachStream,
     preparePhoto, showPreparedPhoto, clearPhoto, hidePhoto, renderCountdown, flashCapture,
     returnDestination, returnPhoto, downloadPhoto, releasePhotoDownloads, reset, releaseDownloads,
     detachStream: () => { video.srcObject = null; },

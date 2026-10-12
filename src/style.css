@@ -32,16 +32,21 @@ button:focus-visible, select:focus-visible, a:focus-visible { outline: 2px solid
 .project-footer { flex-shrink: 0; margin-top: 8px; text-align: right; font-size: 11px; line-height: 16px; }
 .project-footer a { color: #888e99; text-decoration: none; }
 .project-footer a:hover { color: #edeef0; text-decoration: underline; }
-.fullscreen-button { position: absolute; z-index: 3; top: 16px; right: 16px; display: flex; align-items: center; gap: 8px; padding: 9px 11px; color: #c7cad0; background: #17181cbf; border: 1px solid #ffffff20; border-radius: 6px; font-size: 11px; }
-.fullscreen-button svg { width: 16px; height: 16px; }
-.fullscreen-button:hover { color: #fff; background: #1b1d20; }
-.fullscreen-button:disabled { opacity: .45; }
+.preview-tools { position: absolute; z-index: 3; top: 16px; right: 16px; display: flex; gap: 8px; }
+.preview-button { display: flex; align-items: center; gap: 8px; padding: 9px 11px; color: #c7cad0; background: #17181cbf; border: 1px solid #ffffff20; border-radius: 6px; font-size: 11px; }
+#close-preview { margin-left: 8px; }
+.preview-button svg { width: 16px; height: 16px; flex-shrink: 0; }
+.preview-button:hover { color: #fff; background: #1b1d20; }
+.preview-button[aria-pressed="true"] { color: #171717; background: #dedede; border-color: #ededed; }
+.preview-button[aria-pressed="true"]:hover { color: #101010; background: #f0f0f0; border-color: #fff; }
+.preview-button:disabled { opacity: .45; }
 .viewfinder:fullscreen { background: #101113; width: 100vw !important; height: 100dvh !important; border: 0; border-radius: 0; }
 .studio { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .preview-space { flex: 1; min-height: 0; display: grid; place-items: center; }
 .viewfinder { position: relative; width: 100%; aspect-ratio: 16 / 9; container-type: size; overflow: hidden; border-radius: 14px; background: radial-gradient(ellipse at 50% 45%, #25272b 0%, #191b1e 100%); border: 1px solid #303237; }
 .media-surface { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 100%; height: 100%; }
-video { width: 100%; height: 100%; object-fit: contain; transform: scaleX(-1); display: block; opacity: 0; }
+video { width: 100%; height: 100%; object-fit: contain; display: block; opacity: 0; }
+video.is-mirrored { transform: scaleX(-1); }
 .is-live video { opacity: 1; }
 .is-capture-return video { opacity: 0; }
 .is-capture-return .grid, .is-capture-return .shutter { visibility: hidden; }

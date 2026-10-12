@@ -885,3 +885,233 @@ for (const [width, height, resolution] of [[1280, 720, '720'], [640, 480, 'auto'
     } finally { await f.close(); }
   });
 }
+
+test('stopping from the UI cancels countdown, retains photos and settings, and allows restart', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    assert.equal(f.el('#close-preview').hidden, true);
+    await f.camera.openCamera();
+    const track = f.camera.getState().stream.getTracks()[0];
+    const photo = f.addPhoto(); f.redraw();
+    await f.change('#timer', '3');
+    f.capture.startShooting();
+    assert.equal(f.capture.getState().capturePhase, 'countdown');
+    f.el('#close-preview').click();
+    assert.equal(track.stopped, true);
+    assert.equal(f.el('#camera').srcObject, null);
+    assert.equal(f.camera.getState().status, 'OFF');
+    assert.equal(f.el('#close-preview').hidden, true);
+    assert.equal(f.el('#camera-message').textContent, 'カメラは停止しています。');
+    assert.equal(f.document.activeElement, f.el('#start-camera'));
+    await f.advance(5000);
+    assert.equal(f.photos.list().length, 1);
+    assert.equal(f.camera.getState().preferredCameraId, 'built-in');
+    assert.equal(f.el('#timer').value, '3');
+    await f.capture.showPhoto(photo);
+    assert.equal(f.capture.getActions().canDownload, true);
+    await f.capture.returnToCamera();
+    f.el('#start-camera').click(); await flush();
+    assert.equal(f.camera.getState().status, 'LIVE');
+    assert.equal(f.el('#close-preview').hidden, false);
+  } finally { await f.close(); }
+});
+
+test('stopping while video playback is pending immediately releases the connecting stream', async () => {
+  const f = await setup();
+  try {
+    const playback = deferred();
+    f.el('#camera').play = () => playback.promise;
+    const opening = f.camera.openCamera(); await flush();
+    const track = f.el('#camera').srcObject.getTracks()[0];
+    assert.equal(f.el('#close-preview').hidden, false);
+    f.el('#close-preview').click();
+    assert.equal(track.stopped, true);
+    assert.equal(f.el('#camera').srcObject, null);
+    playback.resolve(); await opening;
+    assert.equal(f.camera.getState().status, 'OFF');
+    assert.equal(f.el('#close-preview').hidden, true);
+  } finally { await f.close(); }
+});
+
+test('stopping clears queued camera changes and keeps their preference for restart', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera();
+    await f.change('#timer', '3'); f.capture.startShooting();
+    await f.camera.selectCamera('usb');
+    await f.camera.selectResolution('720');
+    f.el('#close-preview').click();
+    f.el('#start-camera').click(); await flush();
+    assert.equal(f.requests.length, 2);
+    assert.equal(f.requests[1].video.deviceId.exact, 'usb');
+    assert.equal(f.requests[1].video.height.ideal, 720);
+    assert.equal(f.camera.getState().status, 'LIVE');
+  } finally { await f.close(); }
+});
+
+test('stopping during connection rejects late streams without disrupting a restarted camera', async () => {
+  const f = await setup();
+  try {
+    const pending = deferred(), create = f.mediaDevices.getUserMedia;
+    f.mediaDevices.getUserMedia = () => pending.promise;
+    const opening = f.camera.openCamera();
+    assert.equal(f.el('#close-preview').hidden, false);
+    f.el('#close-preview').click();
+    f.mediaDevices.getUserMedia = create;
+    await f.camera.openCamera();
+    const current = f.camera.getState().stream, stale = f.makeStream('usb');
+    pending.resolve(stale); await opening;
+    assert.equal(stale.getTracks()[0].stopped, true);
+    assert.equal(f.camera.getState().stream, current);
+    assert.equal(f.el('#camera').srcObject, current);
+    assert.equal(f.camera.getState().status, 'LIVE');
+  } finally { await f.close(); }
+});
+
+test('stopping during resolution changes permits new changes after restart', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera();
+    const oldChange = deferred();
+    f.camera.getState().stream.getVideoTracks()[0].applyConstraints = () => oldChange.promise;
+    const changing = f.camera.selectResolution('720');
+    f.el('#close-preview').click();
+    await f.camera.openCamera();
+    const active = f.camera.getState().stream.getVideoTracks()[0];
+    const newChange = deferred();
+    const applied = [];
+    active.applyConstraints = async value => {
+      applied.push(value.height.exact);
+      if (applied.length === 1) await newChange.promise;
+    };
+    const latest = f.camera.selectResolution('1080');
+    oldChange.resolve(); await changing;
+    await f.camera.selectResolution('2160');
+    assert.deepEqual(applied, [1080]);
+    newChange.resolve(); await latest; await flush();
+    assert.deepEqual(applied, [1080, 2160]);
+    assert.equal(f.camera.getState().appliedResolution, '2160');
+    assert.equal(f.camera.getState().busy, false);
+  } finally { await f.close(); }
+});
+
+test('close preview closes photos without stopping the camera and follows language and offline state', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    await f.camera.openCamera();
+    const stream = f.camera.getState().stream;
+    const photo = f.addPhoto(); f.redraw();
+    await f.capture.showPhoto(photo);
+    assert.equal(f.el('#close-preview')['aria-label'], '写真を閉じる');
+    await f.change('#language', 'en');
+    assert.equal(f.el('#close-preview').title, 'Close photo');
+    f.el('#close-preview').click(); await flush();
+    assert.equal(f.capture.getState().selectedPhotoId, null);
+    assert.equal(f.camera.getState().stream, stream);
+    assert.equal(stream.getTracks()[0].stopped, false);
+    assert.equal(f.photos.list().length, 1);
+    assert.equal(f.el('#close-preview').title, 'Stop camera');
+    f.el('#close-preview').click();
+    await f.capture.showPhoto(photo);
+    assert.equal(f.el('#close-preview').hidden, false);
+    assert.equal(f.el('#close-preview').title, 'Close photo');
+    f.el('#close-preview').click(); await flush();
+    assert.equal(f.el('#close-preview').hidden, true);
+    assert.equal(f.document.activeElement, f.el('#start-camera'));
+    assert.equal(f.photos.list().length, 1);
+  } finally { await f.close(); }
+});
+
+test('close preview dismisses the automatic capture review while preserving live shooting', async () => {
+  const f = await setup();
+  try {
+    await f.camera.openCamera();
+    const stream = f.camera.getState().stream;
+    await f.capture.capturePhoto();
+    assert.equal(f.capture.getState().captureReturnInProgress, true);
+    assert.equal(f.el('#close-preview').title, '写真を閉じる');
+    f.el('#close-preview').click(); await flush();
+    assert.equal(f.capture.getState().captureReturnInProgress, false);
+    assert.equal(f.el('#photo-review').hidden, true);
+    assert.equal(f.capture.getActions().canShoot, true);
+    assert.equal(f.camera.getState().stream, stream);
+    assert.equal(f.el('#close-preview').title, 'カメラを停止');
+    f.returning()[0].animationCalls[0].finish(); await flush();
+    assert.equal(f.photos.list().length, 1);
+  } finally { await f.close(); }
+});
+
+test('closing a displayed photo while its replacement loads cancels the late preview', async () => {
+  const f = await setup({reducedMotion: true});
+  try {
+    await f.camera.openCamera();
+    await f.capture.showPhoto(f.addPhoto());
+    const decoding = deferred();
+    const prepare = f.view.preparePhoto;
+    f.view.preparePhoto = async photo => {
+      const prepared = await prepare(photo);
+      await decoding.promise;
+      return prepared;
+    };
+    const loading = f.capture.showPhoto(f.addPhoto()); await flush();
+    assert.equal(f.el('#close-preview').title, '写真を閉じる');
+    f.el('#close-preview').click(); await flush();
+    decoding.resolve(); await loading;
+    assert.equal(f.el('#photo-review').hidden, true);
+    assert.equal(f.camera.getState().status, 'LIVE');
+    assert.equal(f.photos.list().length, 2);
+  } finally { await f.close(); }
+});
+
+test('preview toggles preserve the stream and persist through restart, reload and language changes', async () => {
+  const storage = new Map();
+  const f = await setup({storage, reducedMotion: true});
+  try {
+    assert.equal(f.el('#toggle-mirror').hidden, true);
+    await f.camera.openCamera();
+    const stream = f.camera.getState().stream;
+    assert.equal(f.el('#toggle-mirror')['aria-pressed'], 'true');
+    assert.equal(f.el('#toggle-grid')['aria-pressed'], 'true');
+    f.el('#toggle-mirror').click(); f.el('#toggle-grid').click();
+    assert.equal(f.el('#camera').classList.contains('is-mirrored'), false);
+    assert.equal(f.el('.grid').hidden, true);
+    assert.equal(f.camera.getState().stream, stream);
+    assert.equal(f.requests.length, 1);
+    await f.change('#language', 'en');
+    assert.equal(f.el('#toggle-mirror').title, 'Turn mirror preview on');
+    assert.equal(f.el('#toggle-grid').title, 'Turn grid overlay on');
+    await f.change('#timer', '3'); f.capture.startShooting();
+    assert.equal(f.el('#toggle-mirror').hidden, false);
+    f.el('#toggle-mirror').click();
+    assert.equal(f.el('#camera').classList.contains('is-mirrored'), true);
+    f.capture.cancelCountdown();
+    await f.capture.showPhoto(f.addPhoto());
+    assert.equal(f.el('#toggle-mirror').hidden, true);
+    assert.equal(f.el('#toggle-grid').hidden, true);
+    await f.capture.returnToCamera();
+    f.el('#close-preview').click(); await f.camera.openCamera();
+    assert.equal(f.el('#toggle-mirror')['aria-pressed'], 'true');
+    assert.equal(f.el('#toggle-grid')['aria-pressed'], 'false');
+  } finally { await f.close(); }
+  const reloaded = await setup({storage});
+  try {
+    assert.equal(reloaded.el('#toggle-mirror')['aria-pressed'], 'true');
+    assert.equal(reloaded.el('#toggle-grid')['aria-pressed'], 'false');
+    assert.equal(reloaded.el('.grid').hidden, true);
+  } finally { await reloaded.close(); }
+});
+
+test('preview preferences ignore invalid values and remain usable when storage is blocked', async () => {
+  for (const storageBlocked of [false, true]) {
+    const storage = new Map([[savedKey, JSON.stringify({mirror: 'false', grid: 0})]]);
+    const f = await setup({storage, storageBlocked});
+    try {
+      assert.equal(f.el('#toggle-mirror')['aria-pressed'], 'true');
+      assert.equal(f.el('#toggle-grid')['aria-pressed'], 'true');
+      await f.camera.openCamera();
+      f.el('#toggle-mirror').click(); f.el('#toggle-grid').click();
+      assert.equal(f.el('#toggle-mirror')['aria-pressed'], 'false');
+      assert.equal(f.el('#toggle-grid')['aria-pressed'], 'false');
+    } finally { await f.close(); }
+  }
+});

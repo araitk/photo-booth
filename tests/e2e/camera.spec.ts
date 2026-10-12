@@ -192,3 +192,128 @@ test('clicking the capture review restores live shooting before the return anima
   await shutter.click();
   await expect(page.locator('#photo-count')).toHaveText('2');
 });
+
+for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
+  test(`stop camera retains photos and allows restart at ${viewport.width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    const stop = page.getByRole('button', { name: 'カメラを停止', exact: true });
+    await expect(stop).toBeHidden();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    const stopBox = (await stop.boundingBox())!;
+    const fullscreenBox = (await page.locator('#fullscreen').boundingBox())!;
+    expect(stopBox.x - (fullscreenBox.x + fullscreenBox.width)).toBe(16);
+    expect(stopBox.y).toBe(fullscreenBox.y);
+    await page.locator('#shutter').click();
+    const photo = page.locator('.thumbnail').first();
+    await expect(photo).toBeVisible();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await photo.click();
+    const closePhoto = page.getByRole('button', { name: '写真を閉じる', exact: true });
+    await expect(closePhoto).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath('close-photo.png') });
+    await closePhoto.click();
+    await expect(page.locator('#captured-photo')).toBeHidden();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(stop).toBeVisible();
+    await page.locator('#camera').evaluate((video: HTMLVideoElement) => {
+      (window as unknown as { stoppedTrack: MediaStreamTrack }).stoppedTrack = (video.srcObject as MediaStream).getVideoTracks()[0];
+    });
+    await page.screenshot({ path: testInfo.outputPath('stop-button.png') });
+    await stop.focus();
+    await stop.press('Enter');
+    await expect(page.locator('#start-camera')).toBeFocused();
+    await expect(stop).toBeHidden();
+    await expect(page.locator('#camera-message')).toHaveText('カメラは停止しています。');
+    await expect(page.locator('#shutter')).toBeHidden();
+    expect(await page.evaluate(() => (window as unknown as { stoppedTrack: MediaStreamTrack }).stoppedTrack.readyState)).toBe('ended');
+    expect(await page.locator('#camera').evaluate((video: HTMLVideoElement) => video.srcObject)).toBeNull();
+    await photo.click();
+    await expect(page.locator('#download-photo')).toBeEnabled();
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#download-photo').click();
+    await downloadPromise;
+    await page.getByRole('button', { name: '写真を閉じる', exact: true }).click();
+    await expect(page.locator('#close-preview')).toBeHidden();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(page.locator('.thumbnail')).toHaveCount(1);
+    await page.locator('#timer').selectOption('3');
+    await page.locator('#shutter').click();
+    await expect(page.locator('#countdown')).toBeVisible();
+    await stop.click();
+    await expect(page.locator('#countdown')).toBeHidden();
+    await page.locator('#language').selectOption('en');
+    await expect(page.locator('#camera-message')).toHaveText('The camera is stopped.');
+    await page.locator('#start-camera').click();
+    await expect(page.getByRole('button', { name: 'Stop camera', exact: true })).toBeVisible();
+  });
+}
+
+for (const width of [1280, 390]) {
+  test(`mirror and grid control live preview and retain preferences at ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/');
+    const mirror = page.locator('#toggle-mirror');
+    const grid = page.locator('#toggle-grid');
+    const video = page.locator('#camera');
+    await expect(mirror).toBeHidden();
+    await expect(grid).toBeHidden();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(mirror).toHaveAttribute('aria-pressed', 'true');
+    await expect(grid).toHaveAttribute('aria-pressed', 'true');
+    await expect(video).toHaveCSS('transform', 'matrix(-1, 0, 0, 1, 0, 0)');
+    await expect(page.locator('.grid')).toBeVisible();
+    const trackId = await video.evaluate((video: HTMLVideoElement) => (video.srcObject as MediaStream).getVideoTracks()[0].id);
+    const buttons = page.locator('.preview-tools button');
+    expect(await buttons.evaluateAll(nodes => nodes.map(node => node.id))).toEqual(['toggle-mirror', 'toggle-grid', 'fullscreen', 'close-preview']);
+    const boxes = await Promise.all([0, 1, 2, 3].map(index => buttons.nth(index).boundingBox()));
+    for (let index = 1; index < boxes.length; index++) {
+      expect(boxes[index]!.y).toBe(boxes[0]!.y);
+      expect(boxes[index - 1]!.x + boxes[index - 1]!.width).toBeLessThan(boxes[index]!.x);
+    }
+    expect(boxes[3]!.x - (boxes[2]!.x + boxes[2]!.width)).toBe(16);
+    await page.screenshot({ path: testInfo.outputPath('preview-tools.png') });
+    await mirror.focus(); await mirror.press('Enter');
+    await expect(mirror).toBeFocused();
+    await grid.click();
+    await expect(video).toHaveCSS('transform', 'none');
+    await expect(page.locator('.grid')).toBeHidden();
+    expect(await video.evaluate((video: HTMLVideoElement) => (video.srcObject as MediaStream).getVideoTracks()[0].id)).toBe(trackId);
+    await page.locator('#language').selectOption('en');
+    await expect(mirror).toHaveAttribute('title', 'Turn mirror preview on');
+    await expect(grid).toHaveAttribute('title', 'Turn grid overlay on');
+    await mirror.click(); await grid.click();
+    await page.locator('#shutter').click();
+    await expect(page.locator('.thumbnail')).toHaveCount(1);
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await page.locator('.thumbnail').click();
+    await expect(mirror).toBeHidden();
+    await expect(grid).toBeHidden();
+    await expect(page.locator('#captured-photo')).toHaveCSS('transform', 'none');
+    await page.getByRole('button', { name: 'Close photo', exact: true }).click();
+    await page.locator('#timer').selectOption('3');
+    await page.locator('#shutter').click();
+    await expect(page.locator('#countdown')).toBeVisible();
+    await mirror.click(); await grid.click();
+    await expect(video).toHaveCSS('transform', 'none');
+    await page.getByRole('button', { name: 'Stop camera', exact: true }).click();
+    await expect(mirror).toBeHidden();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(mirror).toHaveAttribute('aria-pressed', 'false');
+    await expect(grid).toHaveAttribute('aria-pressed', 'false');
+    await page.reload();
+    await expect(mirror).toBeHidden();
+    await page.locator('#start-camera').click();
+    await expect(page.locator('#shutter')).toBeEnabled();
+    await expect(mirror).toHaveAttribute('aria-pressed', 'false');
+    await expect(grid).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('.grid')).toBeHidden();
+    await expect(video).toHaveCSS('transform', 'none');
+  });
+}

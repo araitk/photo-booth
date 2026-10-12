@@ -5,6 +5,8 @@ interface SavedSettings {
   resolution: string;
   cameraId: string;
   language?: Language;
+  mirror: boolean;
+  grid: boolean;
 }
 
 const settingsStorageKey = 'photo-booth.settings.v1';
@@ -18,6 +20,8 @@ export function loadSettings(): Partial<SavedSettings> {
     if (['auto', '720', '1080', '2160'].includes(saved.resolution)) settings.resolution = saved.resolution;
     if (typeof saved.cameraId === 'string') settings.cameraId = saved.cameraId;
     if (saved.language === 'ja' || saved.language === 'en') settings.language = saved.language;
+    if (typeof saved.mirror === 'boolean') settings.mirror = saved.mirror;
+    if (typeof saved.grid === 'boolean') settings.grid = saved.grid;
     return settings;
   } catch {
     // Keep the defaults if storage is unavailable or the saved data is invalid.

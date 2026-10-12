@@ -13,6 +13,7 @@ export interface CaptureState {
 
 export interface CaptureActions {
   readonly canShoot: boolean;
+  readonly canClosePhoto: boolean;
   readonly canDownload: boolean;
   readonly canDelete: boolean;
   readonly canUndo: boolean;
@@ -52,6 +53,7 @@ export function createCaptureController(options: CaptureOptions) {
     return {
       canShoot: !busy && !captureReturnInProgress && Boolean(stream)
         && ['live', 'countdown', 'returning'].includes(capturePhase) && video.readyState >= 2 && video.videoWidth > 0,
+      canClosePhoto: selectedPhotoId !== null || captureReturnInProgress,
       canDownload: !locked && selectedPhotoId !== null,
       canDelete: !locked && selectedPhotoId !== null,
       canUndo: !locked && photos.canUndo,
@@ -172,6 +174,7 @@ export function createCaptureController(options: CaptureOptions) {
   }
 
   async function returnToCamera(afterCapture = false) {
+    if (capturePhase === 'capturing' && selectedPhotoId !== null) { clearPhoto(); return; }
     if (captureReturnInProgress) {
       captureReturnInProgress = false;
       view.hidePhoto();
